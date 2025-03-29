@@ -33,6 +33,7 @@ import {
   EntityEvent,
   BaseEntityControllerEvent,
   ColliderShape,
+  PersistenceManager,
 } from 'hytopia';
 
 import worldMap from './assets/map.json';
@@ -71,6 +72,37 @@ startServer(world => {
 
   // Create a map to track which pets are following which players
   const petFollowStates: Map<Entity, PetFollowState> = new Map();
+  
+  // Initialize global interaction counters
+  let totalInteractions = 0;
+  
+  // Load global statistics from persistence
+  PersistenceManager.instance.getGlobalData('petStats').then(stats => {
+    if (stats) {
+      totalInteractions = stats.totalInteractions || 0;
+      console.log(`Loaded total pet interactions: ${totalInteractions}`);
+    }
+  }).catch(error => {
+    console.error("Error loading global stats:", error);
+  });
+  
+  // Function to update global statistics
+  const updateGlobalStats = () => {
+    PersistenceManager.instance.setGlobalData('petStats', {
+      totalInteractions,
+      lastUpdated: new Date().toISOString()
+    }).catch(error => {
+      console.error("Error saving global stats:", error);
+    });
+    
+    // Update stats for all connected players
+    for (const playerEntity of playerEntities.values()) {
+      playerEntity.player.ui.sendMessage({
+        type: 'updateStats',
+        totalInteractions
+      });
+    }
+  };
 
   /**
    * Calculate distance between two Vector3 positions
@@ -189,6 +221,10 @@ startServer(world => {
           'FFAA00'
         );
       }
+      
+      // Increment and save global interaction counter
+      totalInteractions++;
+      updateGlobalStats();
     }
   };
 
@@ -254,6 +290,32 @@ startServer(world => {
     
     // Store the player entity for reference
     playerEntities.set(player.id, playerEntity);
+    
+    // Load player's saved data
+    player.getPersistedData().then(playerData => {
+      // Check if player had a pet following them before
+      if (playerData && playerData.followingPet === 'rabbit') {
+        // Make rabbit follow this player
+        const followState = petFollowStates.get(rabbitEntity);
+        if (followState) {
+          followState.isFollowing = true;
+          followState.targetPlayerId = player.id;
+          followState.targetEntity = playerEntity;
+          
+          // Immediately start movement animation when following begins
+          rabbitEntity.stopModelAnimations(['idle']);
+          rabbitEntity.startModelLoopedAnimations(['hop']);
+          
+          world.chatManager.sendPlayerMessage(
+            player, 
+            `Your rabbit remembered you and started following!`, 
+            'FFAA00'
+          );
+        }
+      }
+    }).catch(error => {
+      console.error("Error loading player data:", error);
+    });
 
     // Set up input handling for the player
     const playerController = playerEntity.controller;
@@ -272,6 +334,20 @@ startServer(world => {
         // Toggle following for the rabbit if within range
         if (rabbitDistance <= interactionDistance) {
           makePetFollow(rabbitEntity, playerEntity);
+          
+          // Save player's pet following state
+          const followState = petFollowStates.get(rabbitEntity);
+          if (followState) {
+            // If the pet is now following, save that to player data
+            if (followState.isFollowing && followState.targetPlayerId === player.id) {
+              player.setPersistedData({ followingPet: 'rabbit' })
+                .catch(error => console.error("Error saving player data:", error));
+            } else {
+              // If the pet stopped following, remove that from player data
+              player.setPersistedData({ followingPet: null })
+                .catch(error => console.error("Error saving player data:", error));
+            }
+          }
         } else {
           world.chatManager.sendPlayerMessage(
             player,
@@ -287,6 +363,12 @@ startServer(world => {
 
     // Load our game UI for this player
     player.ui.load('ui/index.html');
+    
+    // Send current stats to the new player
+    player.ui.sendMessage({
+      type: 'updateStats',
+      totalInteractions
+    });
 
     // Send a welcome message with instructions
     world.chatManager.sendPlayerMessage(player, 'Welcome to the game!', '00FF00');

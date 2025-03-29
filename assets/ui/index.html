@@ -100,3 +100,90 @@ and also configure additional buttons for mobile compatibility.
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
   }  
 </style>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pet Following Game</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', sans-serif;
+      color: white;
+    }
+    
+    #game-ui {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    
+    .stats-panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background-color: rgba(0, 0, 0, 0.7);
+      border-radius: 8px;
+      padding: 10px 15px;
+      font-size: 16px;
+      pointer-events: none;
+    }
+    
+    .stats-title {
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #FFAA00;
+    }
+    
+    .stats-value {
+      margin-bottom: 10px;
+    }
+    
+    .instructions {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(0, 0, 0, 0.7);
+      border-radius: 8px;
+      padding: 10px 15px;
+      text-align: center;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-ui">
+    <div class="stats-panel">
+      <div class="stats-title">Pet World Stats</div>
+      <div class="stats-value">Total Interactions: <span id="total-interactions">0</span></div>
+    </div>
+    
+    <div class="instructions">
+      Press <strong>E</strong> when near a pet to make it follow you.
+    </div>
+  </div>
+  
+  <script>
+    // Initialize UI
+    document.addEventListener('DOMContentLoaded', function() {
+      // Get reference to UI elements
+      const totalInteractionsElem = document.getElementById('total-interactions');
+      
+      // Listen for messages from server
+      window.addEventListener('message', function(event) {
+        const message = event.data;
+        
+        // Update stats if we received stat updates
+        if (message.type === 'updateStats') {
+          totalInteractionsElem.textContent = message.totalInteractions;
+        }
+      });
+    });
+  </script>
+</body>
+</html>
