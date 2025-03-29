@@ -97,7 +97,7 @@ startServer(world => {
     
     // Update stats for all connected players
     for (const playerEntity of playerEntities.values()) {
-      playerEntity.player.ui.sendMessage({
+      playerEntity.player.ui.postMessage({
         type: 'updateStats',
         totalInteractions
       });
@@ -365,7 +365,7 @@ startServer(world => {
     player.ui.load('ui/index.html');
     
     // Send current stats to the new player
-    player.ui.sendMessage({
+    player.ui.postMessage({
       type: 'updateStats',
       totalInteractions
     });
