@@ -1,0 +1,50 @@
+# Node.js dependencies
+node_modules/
+
+# Environment variables and secrets
+.env
+*.env.local
+
+# Build directories
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Development directories
+.dev/
+dev/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# output
+out
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# dotenv environment variable files
+.env.development.local
+.env.test.local
+.env.production.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
