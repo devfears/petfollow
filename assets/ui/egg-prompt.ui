@@ -1,0 +1,59 @@
+<style>
+  .egg-prompt-container {
+    position: absolute; /* Or fixed, depending on desired behavior */
+    /* Adjust top/left/right/bottom and transform for positioning */
+    /* Example: Center bottom */
+    bottom: 20px; 
+    left: 50%;
+    transform: translateX(-50%);
+
+    background-color: #8B4513; /* SaddleBrown */
+    border: 3px solid #4A2A00; /* Darker Brown Border */
+    border-radius: 8px;
+    padding: 10px 15px;
+    display: flex; /* Use flexbox for layout */
+    align-items: center; /* Vertically center items */
+    gap: 10px; /* Space between image and text */
+    color: white;
+    font-family: sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Optional shadow */
+    z-index: 10; /* Ensure it's above other elements if needed */
+    /* Initially hidden, controlled by script */
+    display: none; 
+  }
+
+  .egg-prompt-container.visible {
+      display: flex; /* Show when visible class is added */
+  }
+
+  .egg-prompt-image {
+    width: 40px; /* Adjust size as needed */
+    height: 40px;
+    object-fit: contain; /* Keep aspect ratio */
+  }
+
+  .egg-prompt-text {
+    margin: 0; /* Remove default margins */
+  }
+</style>
+
+<div id="eggPrompt" class="egg-prompt-container" :class="{ visible: state.visible }">
+  <!-- 
+    NOTE: You might need to adjust the image source path ('/assets/rabbit-icon.png') 
+    based on where you actually place the rabbit image file within your project's assets.
+    Consider creating a simple 2D icon for the rabbit.
+  -->
+  <img src="/assets/rabbit-icon.png" alt="Rabbit" class="egg-prompt-image" /> 
+  <p class="egg-prompt-text">Free</p>
+</div>
+
+<script>
+  // Basic script setup for Hytopia UI state binding
+  export default {
+    state: {
+      visible: false // Default state: hidden
+    }
+  };
+</script> 

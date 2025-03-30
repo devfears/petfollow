@@ -4,33 +4,254 @@ and also configure additional buttons for mobile compatibility.
 -->
 
 <script>
-  // Handle interact button touch / untouch
+  // Listen for messages from server using hytopia.onData
+  hytopia.onData(data => {
+    // Handle leaderboard updates
+    if (data.type === 'updateLeaderboard' && Array.isArray(data.leaderboard)) {
+      updateLeaderboard(data.leaderboard);
+    }
+    
+    // Handle tower floor updates
+    if (data.type === 'updateTowerFloor' && data.floor !== undefined) {
+      const floorDisplay = document.getElementById('tower-floor-number');
+      if (floorDisplay) {
+        floorDisplay.textContent = data.floor;
+      }
+    }
+
+    // Handle block count updates
+    if (data.type === 'updateBlockCount' && data.blockCount !== undefined) {
+      const blockCountElem = document.querySelector('.top-block-count');
+      if (blockCountElem) {
+        blockCountElem.textContent = data.blockCount;
+      }
+      
+      // Update rate text if provided
+      if (data.blockRate !== undefined) {
+        const blockRateElem = document.querySelector('.top-block-rate');
+        if (blockRateElem) {
+          blockRateElem.textContent = data.blockRate;
+        }
+      }
+    }
+
+    // --- ADDED: Handle Egg Prompt Updates ---
+    if (data.type === 'updateChickenEggPrompt') {
+      const eggPromptElement = document.getElementById('eggPrompt');
+      if (eggPromptElement) {
+        console.log('Received updateChickenEggPrompt:', data.visible); // Updated log
+        if (data.visible) {
+          eggPromptElement.classList.add('visible');
+        } else {
+          eggPromptElement.classList.remove('visible');
+        }
+      } else {
+        console.error('#eggPrompt element not found when trying to update visibility');
+      }
+    } else if (data.type === 'updateSilverEggPrompt') {
+      const eggPromptElement = document.getElementById('silverEggPrompt');
+      if (eggPromptElement) {
+        console.log('Received updateSilverEggPrompt:', data.visible);
+        if (data.visible) {
+          eggPromptElement.classList.add('visible');
+        } else {
+          eggPromptElement.classList.remove('visible');
+        }
+      } else {
+        console.error('#silverEggPrompt element not found');
+      }
+    } else if (data.type === 'updateGoldenEggPrompt') {
+      const eggPromptElement = document.getElementById('goldenEggPrompt');
+      if (eggPromptElement) {
+        console.log('Received updateGoldenEggPrompt:', data.visible);
+        if (data.visible) {
+          eggPromptElement.classList.add('visible');
+        } else {
+          eggPromptElement.classList.remove('visible');
+        }
+      } else {
+        console.error('#goldenEggPrompt element not found');
+      }
+    } else if (data.type === 'updateDiamondEggPrompt') {
+      const eggPromptElement = document.getElementById('diamondEggPrompt');
+      if (eggPromptElement) {
+        console.log('Received updateDiamondEggPrompt:', data.visible);
+        if (data.visible) {
+          eggPromptElement.classList.add('visible');
+        } else {
+          eggPromptElement.classList.remove('visible');
+        }
+      } else {
+        console.error('#diamondEggPrompt element not found');
+      }
+    }
+    // --- END ADDED: Handle Egg Prompt Updates ---
+  });
+
+  // Function to update the leaderboard UI with new data
+  function updateLeaderboard(leaderboardData) {
+    const entries = document.querySelectorAll('.leaderboard-entry');
+    
+    // Update each leaderboard entry with data if available
+    entries.forEach((entry, index) => {
+      if (index < leaderboardData.length) {
+        const playerData = leaderboardData[index];
+        const rankElem = entry.querySelector('.rank');
+        const nameElem = entry.querySelector('.player-name');
+        const scoreElem = entry.querySelector('.score');
+        
+        if (rankElem) rankElem.textContent = index + 1;
+        if (nameElem) nameElem.textContent = playerData.name || `Player${index+1}`;
+        if (scoreElem) scoreElem.textContent = playerData.score || 0;
+      }
+    });
+  }
+
+  // --- Teleport Button Logic ---
+  const teleportButton = document.getElementById('teleport-button');
+  if (teleportButton) {
+    teleportButton.addEventListener('click', () => {
+      console.log("Teleport button clicked (Client-side), sending request to server...");
+      // Send a message to the server requesting teleport
+      hytopia.sendData({ type: 'requestTowerTeleport' });
+    });
+  }
+
+  // --- Scene UI Template Registration ---
+  hytopia.registerSceneUITemplate('interaction-leaderboard', (id, onState) => {
+    // Clone the template content
+    const template = document.getElementById('leaderboard-template');
+    if (!template) return document.createElement('div'); // Return empty div if template missing
+    const clone = template.content.cloneNode(true);
+
+    // Get the element to display the count within the cloned template
+    const countElement = clone.querySelector('.leaderboard-value'); 
+    // Note: Using querySelector on the *clone*, not the global document
+
+    // Define how to update the UI when state changes
+    onState(state => {
+      if (countElement && state.totalInteractions !== undefined) {
+        countElement.textContent = state.totalInteractions;
+      }
+    });
+
+    // Return the fully setup clone
+    return clone;
+  });
+
+  // --- Tower Floor Template Registration ---
+  hytopia.registerSceneUITemplate('tower-floor-display', (id, onState) => {
+    const template = document.getElementById('tower-floor-template');
+    if (!template) return document.createElement('div');
+    const clone = template.content.cloneNode(true);
+
+    const floorNumberElement = clone.querySelector('.floor-number');
+
+    onState(state => {
+      if (floorNumberElement && state.floor !== undefined) {
+        floorNumberElement.textContent = state.floor;
+      }
+    });
+
+    return clone;
+  });
+
+  // --- Rabbit Nametag Template Registration --- 
+  hytopia.registerSceneUITemplate('rabbit-nametag', (id, onState) => {
+    const template = document.getElementById('rabbit-nametag-template');
+    if (!template) return document.createElement('div'); // Handle template not found
+    const clone = template.content.cloneNode(true);
+
+    // Get reference to the text elements and the status container within the clone
+    const ownerNameElement = clone.querySelector('.owner-name'); 
+    const statusElement = clone.querySelector('.animal-status'); 
+    const statusContainer = clone.querySelector('.status-tag-container'); // Get the container
+
+    // Define how state updates change the UI
+    onState(state => {
+      // --- ADDED: Log the received state object --- 
+      console.log('[SceneUI Nametag] Received state:', JSON.stringify(state)); 
+      // --- END LOG ---
+
+      if (ownerNameElement && state && typeof state.ownerName === 'string') {
+        ownerNameElement.textContent = `Owner: ${state.ownerName}`;
+      }
+      if (statusElement && state && typeof state.status === 'string') {
+        statusElement.textContent = state.status; // Update the status text
+      }
+      // Apply the status class to the container
+      if (statusContainer && state && typeof state.statusClass === 'string') {
+        // Remove previous status classes before adding the new one
+        statusContainer.classList.remove('status-basic', 'status-normal'); 
+        statusContainer.classList.add(state.statusClass);
+      } 
+    });
+
+    // Return the fully setup clone
+    return clone;
+  });
+
+  // --- Block Counter Template Registration ---
+  hytopia.registerSceneUITemplate('block-counter', (id, onState) => {
+    const template = document.getElementById('block-counter-template');
+    if (!template) return document.createElement('div'); // Handle template not found
+    const clone = template.content.cloneNode(true);
+
+    // Get references to elements within the cloned template
+    const blockCountElement = clone.querySelector('.block-count');
+    const blockRateElement = clone.querySelector('.block-rate');
+    
+    // Define how state updates change the UI
+    onState(state => {
+      if (blockCountElement && typeof state.blockCount === 'number') {
+        blockCountElement.textContent = state.blockCount;
+      }
+      
+      if (blockRateElement && typeof state.blockRate === 'string') {
+        blockRateElement.textContent = state.blockRate;
+      }
+    });
+
+    return clone;
+  });
+
+  // TODO: Re-evaluate mobile button handling. 
+  // The original code used touchstart/touchend directly on UI elements.
+  // The standard Hytopia approach might involve:
+  // 1. Sending data *to* the server via hytopia.sendData on button interaction.
+  // 2. Server handling the input logic (e.g., using player.pressInput based on received data).
+  // The code below is commented out as it might conflict with standard practices.
+  /* 
   const mobileInteractButton = document.getElementById('mobile-interact-button');
+  if (mobileInteractButton) {
   mobileInteractButton.addEventListener('touchstart', e => {
-    e.preventDefault(); // Prevents mobile highlight/select/copy popup behaviors
-    mobileInteractButton.classList.add('active'); // more immediate feedback to add/remove active class
-    hytopia.pressInput('ml', true);
+      e.preventDefault(); 
+      mobileInteractButton.classList.add('active'); 
+      hytopia.pressInput('ml', true); // Consider sending data instead
   });
 
   mobileInteractButton.addEventListener('touchend', e => {
     e.preventDefault();
     mobileInteractButton.classList.remove('active');
-    hytopia.pressInput('ml', false);
+      hytopia.pressInput('ml', false); // Consider sending data instead
   });
+  }
 
-  // Handle jump button touch / untouch
   const mobileJumpButton = document.getElementById('mobile-jump-button');
+  if (mobileJumpButton) {
   mobileJumpButton.addEventListener('touchstart', e => {
     e.preventDefault();
     mobileJumpButton.classList.add('active');
-    hytopia.pressInput(' ', true);
+      hytopia.pressInput(' ', true); // Consider sending data instead
   });
 
   mobileJumpButton.addEventListener('touchend', e => {
     e.preventDefault();
     mobileJumpButton.classList.remove('active');
-    hytopia.pressInput(' ', false);
+      hytopia.pressInput(' ', false); // Consider sending data instead
   });
+  }
+  */
 </script>
 
 <!--
@@ -50,6 +271,160 @@ and also configure additional buttons for mobile compatibility.
   <a id="mobile-jump-button" class="mobile-button">
     <img src="{{CDN_ASSETS_URL}}/icons/jump.png" />
   </a>
+</div>
+
+<div id="game-ui">
+  <!-- Replace stats panel with leaderboard -->
+  <div class="leaderboard-panel">
+    <div class="leaderboard-title">Leaderboard</div>
+    <div class="leaderboard-entries">
+      <div class="leaderboard-entry">
+        <div class="rank">1</div>
+        <div class="player-name">Player1</div>
+        <div class="score">120</div>
+      </div>
+      <div class="leaderboard-entry">
+        <div class="rank">2</div>
+        <div class="player-name">Player2</div>
+        <div class="score">95</div>
+      </div>
+      <div class="leaderboard-entry">
+        <div class="rank">3</div>
+        <div class="player-name">Player3</div>
+        <div class="score">87</div>
+      </div>
+      <div class="leaderboard-entry">
+        <div class="rank">4</div>
+        <div class="player-name">Player4</div>
+        <div class="score">64</div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="instructions">
+    Press <strong>E</strong> when near a pet to make it follow you.
+  </div>
+
+  <!-- Other UI elements like tower floor, block count display, etc. might go here -->
+  <div class="top-right-info">
+    <div id="tower-floor-display">Floor: <span id="tower-floor-number">1</span></div>
+    <div>Blocks: <span class="top-block-count">0</span> (<span class="top-block-rate">0/s</span>)</div>
+  </div>
+
+  <a id="teleport-button" class="teleport-button-style">Teleport to Top</a>
+
+  <!-- ADDED: Egg Prompt HTML Structure -->
+  <div id="eggPrompt">
+    <div class="images">
+      <!-- Placeholder images - replace src later -->
+      <img src="{{CDN_ASSETS_URL}}/animals/chicken.png" alt="Chicken">
+      <img src="{{CDN_ASSETS_URL}}/animals/rabbit.png" alt="Rabbit">
+      <img src="{{CDN_ASSETS_URL}}/animals/pig.png" alt="Pig">
+    </div>
+    <div class="text">Free</div>
+  </div>
+  <!-- END ADDED: Egg Prompt HTML Structure -->
+
+</div>
+
+<!-- Template for the in-world leaderboard -->
+<template id="leaderboard-template">
+  <div class="leaderboard-panel">
+    <div class="leaderboard-title">Total Interactions</div>
+    <div class="leaderboard-value" id="leaderboard-interactions">0</div>
+  </div>
+</template>
+
+<!-- Template for the Tower Floor Display -->
+<template id="tower-floor-template">
+  <div class="floor-display-panel">
+    <div class="floor-display-text">Floor: <span class="floor-number">1</span></div>
+  </div>
+</template>
+
+<!-- MOVED & CORRECTED: Block Counter Scene UI Template -->
+<template id="block-counter-template">
+  <div class="block-counter-scene-ui">
+    <span class="block-count">0</span> Blocks (<span class="block-rate">0/s</span>)
+  </div>
+</template>
+<!-- END MOVED & CORRECTED: Block Counter Scene UI Template -->
+
+<!-- Template for Rabbit Status Nametag -->
+<template id="rabbit-nametag-template" data-template-id="rabbit-nametag">
+  <style>
+    /* New wrapper for the two tags */
+    .nametag-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px; /* Space between the two tags */
+    }
+    /* Shared style for the individual tag containers */
+    .owner-tag-container,
+    .status-tag-container {
+      padding: 3px 8px;
+      background-color: rgba(0, 0, 0, 0.5); /* Semi-transparent dark background */
+      border-radius: 5px;
+      text-align: center;
+    }
+    /* Style for owner name text */
+    .owner-name {
+      font-size: 12px; /* Smaller font size */
+      color: #ffffff; /* White text */
+      font-family: sans-serif;
+      font-weight: normal;
+      text-shadow: 1px 1px 1px rgba(0,0,0,0.6); /* Simple shadow for readability */
+      margin: 0; /* Remove default margins */
+    }
+    /* Style for the status text (glowing gray by default) */
+    .animal-status {
+      font-size: 14px; /* Original size */
+      color: #aaaaaa; /* Grey text color */
+      font-family: sans-serif;
+      font-weight: bold; /* Make text bolder */
+      -webkit-text-stroke: 1px black;
+      text-stroke: 1px black;
+      paint-order: stroke fill; 
+      text-shadow: 0 0 8px rgba(170, 170, 170, 0.7); /* Glowing gray shadow */
+      margin: 0; /* Remove default margins */
+    }
+    /* ADDED: Style for Basic status background */
+    .status-tag-container.status-basic {
+      background-color: rgba(139, 69, 19, 0.8); /* Brown background */
+      border: 1px solid rgba(160, 82, 45, 0.9); /* Sienna border */
+    }
+    /* ADDED: Style for Basic status text color */
+    .status-tag-container.status-basic .animal-status {
+       color: #FFD700; /* Gold text color for contrast */
+       text-shadow: 0 0 8px rgba(255, 215, 0, 0.7); /* Glowing gold shadow */
+    }
+     /* ADDED: Style for Normal status background (default gray) */
+    .status-tag-container.status-normal {
+       background-color: rgba(100, 100, 100, 0.7); /* Default gray background */
+       border: 1px solid rgba(150, 150, 150, 0.9);
+    }
+     /* ADDED: Style for Normal status text color (default gray) */
+    .status-tag-container.status-normal .animal-status {
+       color: #aaaaaa; /* Grey text color */
+       text-shadow: 0 0 8px rgba(170, 170, 170, 0.7); /* Glowing gray shadow */
+    }
+  </style>
+  <div class="nametag-wrapper"> <!-- Main wrapper -->
+    <div class="owner-tag-container"> <!-- Owner tag -->
+      <p class="owner-name">Owner: Unknown</p> <!-- Placeholder -->
+    </div>
+    <div class="status-tag-container"> <!-- Status tag (will get class added) -->
+      <p class="animal-status">normal</p> <!-- Placeholder -->
+    </div>
+  </div>
+</template>
+
+<!-- Add this new UI element to match the image, which will be positioned at the top center -->
+<div class="top-block-counter">
+  <div class="top-block-icon"></div>
+  <div class="top-block-count">0</div>
+  <div class="top-block-rate">+1 Block/s</div>
 </div>
 
 <style>
@@ -82,16 +457,21 @@ and also configure additional buttons for mobile compatibility.
     transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
     will-change: transform, background-color;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', sans-serif; /* Ensure font is loaded or default */
     font-size: 14px;
     font-weight: bold;
     color: rgba(255, 255, 255, 0.8);
     text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+    pointer-events: auto; /* Make buttons clickable */
+    cursor: pointer; /* Indicate clickable */
+    user-select: none; /* Prevent text selection */
+    -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
   }
   
   .mobile-button img {
     width: 22px;
     height: 22px;
+    pointer-events: none; /* Prevent image from capturing events */
   }
 
   .mobile-button.active {
@@ -99,48 +479,78 @@ and also configure additional buttons for mobile compatibility.
     background-color: rgba(0, 0, 0, 0.75);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
   }  
-</style>
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pet Following Game</title>
-  <style>
+  /* Styles for the main UI elements */
     body {
       margin: 0;
       padding: 0;
-      font-family: 'Inter', sans-serif;
+    font-family: 'Inter', sans-serif; /* Ensure font is loaded or default */
       color: white;
+    background-color: transparent; /* Ensure body is transparent */
     }
     
     #game-ui {
       position: absolute;
       width: 100%;
       height: 100%;
-      pointer-events: none;
+    pointer-events: none; /* Allow clicks to pass through UI background */
     }
     
-    .stats-panel {
+    /* New leaderboard styles to replace stats-panel */
+    .leaderboard-panel {
       position: absolute;
       top: 20px;
       right: 20px;
       background-color: rgba(0, 0, 0, 0.7);
       border-radius: 8px;
-      padding: 10px 15px;
-      font-size: 16px;
-      pointer-events: none;
+      padding: 10px;
+      font-size: 14px;
+      pointer-events: auto;
+      min-width: 180px;
     }
     
-    .stats-title {
+    .leaderboard-title {
       font-weight: bold;
-      margin-bottom: 5px;
+      margin-bottom: 8px;
+      color: #FFAA00;
+      text-align: center;
+      font-size: 16px;
+    }
+    
+    .leaderboard-entries {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    
+    .leaderboard-entry {
+      display: grid;
+      grid-template-columns: 20px 1fr 40px;
+      gap: 8px;
+      align-items: center;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    .leaderboard-entry:last-child {
+      border-bottom: none;
+    }
+    
+    .rank {
+      text-align: center;
+      font-weight: bold;
       color: #FFAA00;
     }
     
-    .stats-value {
-      margin-bottom: 10px;
+    .player-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .score {
+      text-align: right;
+      font-weight: bold;
     }
     
     .instructions {
@@ -152,38 +562,320 @@ and also configure additional buttons for mobile compatibility.
       border-radius: 8px;
       padding: 10px 15px;
       text-align: center;
-      pointer-events: none;
-    }
-  </style>
-</head>
-<body>
-  <div id="game-ui">
-    <div class="stats-panel">
-      <div class="stats-title">Pet World Stats</div>
-      <div class="stats-value">Total Interactions: <span id="total-interactions">0</span></div>
-    </div>
+    pointer-events: auto; /* Make instructions potentially interactable if needed */
+  }
+
+  /* Styles for the Tower Floor Display */
+  .floor-display-panel {
+    background-color: rgba(100, 0, 100, 0.7); /* Purple background */
+    border: 1px solid rgba(200, 100, 200, 0.9);
+    border-radius: 4px;
+    padding: 3px 8px; /* Smaller padding */
+    color: white;
+    font-family: 'Arial', sans-serif;
+    font-size: 12px; /* Smaller font size */
+    text-align: center;
+    text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.6);
+  }
+
+  .floor-display-text {
+    font-weight: bold;
+  }
+
+  .floor-number {
+    /* Specific styling for the number if needed */
+  }
+
+  /* Style for the teleport button */
+  #teleport-button {
+    position: fixed;
+    top: 70px; /* Position below existing UI elements */
+    left: 10px;
+    padding: 8px 15px;
+    background-color: #4CAF50; /* Green */
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    z-index: 1001; /* Ensure it's above other elements */
+  }
+
+  #teleport-button:hover {
+    background-color: #45a049;
+  }
+
+  /* Styles for Block Counter UI */
+  .block-counter-container {
+    background-color: white;
+    border: 2px solid #333;
+    border-radius: 10px;
+    padding: 5px 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 120px;
+  }
+
+  .block-counter-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .block-icon {
+    width: 30px;
+    height: 30px;
+    position: relative;
+    transform-style: preserve-3d;
+    transform: rotateX(-20deg) rotateY(30deg);
+  }
+
+  .block-icon::before,
+  .block-icon::after {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Top face */
+  .block-icon {
+    background-color: #8B5A2B; /* Brown top */
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+
+  /* Left face */
+  .block-icon::before {
+    background-color: #654321; /* Darker brown side */
+    transform: rotateY(-90deg);
+    transform-origin: left;
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+
+  /* Right face */
+  .block-icon::after {
+    background-color: #75572C; /* Medium brown side */
+    transform: rotateX(90deg);
+    transform-origin: top;
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+
+  .block-count {
+    font-size: 28px;
+    font-weight: bold;
+    color: #000;
+  }
+
+  .block-rate {
+    font-size: 14px;
+    color: #333;
+    text-align: center;
+    margin-top: 2px;
+  }
+
+  /* Top block counter UI */
+  .top-block-counter {
+    position: fixed; 
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: white;
+    border: 2px solid #333;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 15px;
+    z-index: 1000;
+    min-width: 100px;
+    justify-content: center;
+    pointer-events: none; /* Allow clicks through */
+  }
+
+  .top-block-icon {
+    width: 25px;
+    height: 25px;
+    position: relative;
+    transform-style: preserve-3d;
+    transform: rotateX(-20deg) rotateY(30deg);
+    background-color: #8B5A2B; /* Brown top */
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+
+  .top-block-icon::before,
+  .top-block-icon::after {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Left face */
+  .top-block-icon::before {
+    background-color: #654321; /* Darker brown side */
+    transform: rotateY(-90deg);
+    transform-origin: left;
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+
+  /* Right face */
+  .top-block-icon::after {
+    background-color: #75572C; /* Medium brown side */
+    transform: rotateX(90deg);
+    transform-origin: top;
+    border: 1px solid rgba(0, 0, 0, 0.3);
+  }
+
+  .top-block-count {
+    font-size: 24px;
+    font-weight: bold;
+    color: #000;
+  }
+
+  .top-block-rate {
+    font-size: 12px;
+    color: #333;
+    margin-top: 0;
+    white-space: nowrap;
+  }
+
+  /* --- ADDED: Egg Prompt Styling --- */
+  /* Shared styles for all prompts */
+  #eggPrompt, #silverEggPrompt, #goldenEggPrompt, #diamondEggPrompt {
+    /* Initially hidden */
+    display: none; 
     
-    <div class="instructions">
-      Press <strong>E</strong> when near a pet to make it follow you.
-    </div>
+    /* Positioning */
+    position: fixed; /* Or absolute, depending on desired behavior */
+    bottom: 20%; /* Position roughly 20% from the bottom */
+    left: 50%;
+    transform: translateX(-50%); /* Center horizontally */
+
+    /* Appearance */
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(5px);
+
+    /* Layout */
+    flex-direction: column; /* Stack images and text vertically */
+    align-items: center; /* Center items horizontally */
+    gap: 15px; /* Space between image row and text */
+    z-index: 100; /* Ensure it's above other UI elements */
+    color: #e0e0e0; /* Light text color */
+    font-family: 'Arial', sans-serif; /* Basic font */
+  }
+
+  /* Default/Chicken Egg Prompt Specific Style */
+  #eggPrompt {
+    background-color: rgba(139, 69, 19, 0.85); /* Brown semi-transparent background */
+    border: 2px solid rgba(160, 82, 45, 0.7); /* Sienna border */
+  }
+
+  /* Silver Egg Prompt Specific Style */
+  #silverEggPrompt {
+    background-color: rgba(100, 100, 100, 0.85); /* Gray */
+    border: 2px solid rgba(180, 180, 180, 0.5); /* Lighter gray border */
+  }
+
+  /* Golden Egg Prompt Specific Style */
+  #goldenEggPrompt {
+    background-color: rgba(180, 160, 40, 0.85); /* Yellowish */
+    border: 2px solid rgba(220, 200, 80, 0.5); /* Lighter gold border */
+  }
+
+  /* Diamond Egg Prompt Specific Style */
+  #diamondEggPrompt {
+    background-color: rgba(40, 160, 180, 0.85); /* Cyan */
+    border: 2px solid rgba(80, 200, 220, 0.5); /* Lighter cyan border */
+  }
+
+  /* Class to show the prompts */
+  #eggPrompt.visible, 
+  #silverEggPrompt.visible, 
+  #goldenEggPrompt.visible, 
+  #diamondEggPrompt.visible {
+    display: flex; 
+  }
+
+  /* Shared styles for images and text within prompts */
+  #eggPrompt .images, 
+  #silverEggPrompt .images, 
+  #goldenEggPrompt .images, 
+  #diamondEggPrompt .images {
+    display: flex; /* Arrange images horizontally */
+    gap: 10px; /* Space between images */
+  }
+
+  #eggPrompt img, 
+  #silverEggPrompt img, 
+  #goldenEggPrompt img, 
+  #diamondEggPrompt img {
+    width: 64px; /* Adjust size as needed */
+    height: 64px;
+    object-fit: contain; /* Keep image aspect ratio */
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+  }
+
+  #eggPrompt .text, 
+  #silverEggPrompt .text, 
+  #goldenEggPrompt .text, 
+  #diamondEggPrompt .text {
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #00ffaa; /* Bright color for emphasis */
+    text-shadow: 0 0 5px rgba(0, 255, 170, 0.5);
+  }
+  /* --- END ADDED: Egg Prompt Styling --- */
+
+  /* TODO: CSS for block-counter-scene-ui might be needed here if not defined elsewhere */
+
+</style>
+
+<!-- Button to teleport to tower top -->
+<button id="teleport-button">Teleport to Tower</button>
+
+<!-- ADDED: Egg Prompt HTML Structure -->
+<div id="eggPrompt">
+  <div class="images">
+    <!-- Placeholder images - replace src later -->
+    <img src="{{CDN_ASSETS_URL}}/animals/chicken.png" alt="Chicken">
+    <img src="{{CDN_ASSETS_URL}}/animals/rabbit.png" alt="Rabbit">
+    <img src="{{CDN_ASSETS_URL}}/animals/pig.png" alt="Pig">
   </div>
-  
-  <script>
-    // Initialize UI
-    document.addEventListener('DOMContentLoaded', function() {
-      // Get reference to UI elements
-      const totalInteractionsElem = document.getElementById('total-interactions');
-      
-      // Listen for messages from server
-      window.addEventListener('message', function(event) {
-        const message = event.data;
-        
-        // Update stats if we received stat updates
-        if (message.type === 'updateStats') {
-          totalInteractionsElem.textContent = message.totalInteractions;
-        }
-      });
-    });
-  </script>
-</body>
-</html>
+  <div class="text">Free</div>
+</div>
+<!-- END ADDED: Egg Prompt HTML Structure -->
+
+<!-- Duplicated for Silver Egg -->
+<div id="silverEggPrompt">
+  <div class="images">
+    <img src="{{CDN_ASSETS_URL}}/animals/bat.png" alt="Bat">
+    <img src="{{CDN_ASSETS_URL}}/animals/cow.png" alt="Cow">
+    <img src="{{CDN_ASSETS_URL}}/animals/sheep.png" alt="Sheep">
+  </div>
+  <div class="text">Free</div>
+</div>
+
+<!-- Duplicated for Golden Egg -->
+<div id="goldenEggPrompt">
+  <div class="images">
+    <img src="{{CDN_ASSETS_URL}}/blocks/gold.png" alt="Gold Animal 1"> <!-- Placeholder -->
+    <img src="{{CDN_ASSETS_URL}}/blocks/gold.png" alt="Gold Animal 2"> <!-- Placeholder -->
+    <img src="{{CDN_ASSETS_URL}}/blocks/gold.png" alt="Gold Animal 3"> <!-- Placeholder -->
+  </div>
+  <div class="text">Free</div>
+</div>
+
+<!-- Duplicated for Diamond Egg -->
+<div id="diamondEggPrompt">
+  <div class="images">
+    <img src="{{CDN_ASSETS_URL}}/blocks/diamond.png" alt="Diamond Animal 1"> <!-- Placeholder -->
+    <img src="{{CDN_ASSETS_URL}}/blocks/diamond.png" alt="Diamond Animal 2"> <!-- Placeholder -->
+    <img src="{{CDN_ASSETS_URL}}/blocks/diamond.png" alt="Diamond Animal 3"> <!-- Placeholder -->
+  </div>
+  <div class="text">Free</div>
+</div>
