@@ -62,6 +62,10 @@ interface PetFollowState {
 // Define the distance threshold for showing the egg prompt
 const EGG_PROMPT_DISTANCE = 2.5; 
 
+// --- ADDED: Map to track the currently visible prompt type per player ---
+// Stores the EggType (or null) currently displayed for each player ID
+const playerVisiblePrompt: Map<string, EggType | null> = new Map();
+
 // Helper function to convert numerical RigidBody types from JSON to enum members
 const processMapData = (mapData: any): any => {
   if (mapData && typeof mapData === 'object' && mapData.entities) {
@@ -84,6 +88,21 @@ const processMapData = (mapData: any): any => {
   }
   return mapData; // Return the processed (or original if no entities) map data
 };
+
+// --- ADDED: Collision Groups Definition ---
+const COLLISION_GROUP_PLAYERS = CollisionGroup.GROUP_1;
+const COLLISION_GROUP_PETS    = CollisionGroup.GROUP_2;
+// --- END ADDED ---
+
+// Create a map to track which pets are following which players
+const petFollowStates = new Map<Entity, PetFollowState>();
+
+// --- ADDED: Map to track entity IDs to their persistent IDs ---
+const entityIdToPersistentIdMap = new Map<number, string>();
+// --- END ADDED ---
+
+// Add a Map to store session pets for each player
+const playerSessionPets = new Map<string, Array<{ type: string, persistentId: string, rarity: EggType }>>();
 
 /**
  * startServer is always the entry point for our game.
@@ -147,8 +166,10 @@ startServer((world: World) => {
   // Store all player entities for reference
   const playerEntities: Map<string, PlayerEntity> = new Map();
 
-  // Create a map to track which pets are following which players
-  const petFollowStates: Map<Entity, PetFollowState> = new Map();
+  // --- ADDED: Counter for Basic Egg Hatch Sequence ---
+  // let basicEggHatchSequence = 0; // 0 = Rabbit, 1 = Pig, 2 = Chicken
+  // const BASIC_EGG_SEQUENCE_LENGTH = 3; // Number of pets in the sequence
+  // --- END ADDED ---
 
   // Track the 'E' key press state for each player to detect single presses
   const playerEPressedState: Map<string, boolean> = new Map();
@@ -182,6 +203,8 @@ startServer((world: World) => {
   
   // Function to update the leaderboard ranking
   const updateLeaderboard = () => {
+    // --- LOGGING: Leaderboard Update Start --- 
+    // console.log(`[Leaderboard] Updating leaderboard...`); // <<< COMMENTED OUT
     // Create entries from player scores
     const entries: LeaderboardEntry[] = [];
     
@@ -193,8 +216,14 @@ startServer((world: World) => {
           name: playerEntity.player.username,
           score
         });
+      } else {
+        // --- LOGGING: Player entity not found for score --- 
+        console.warn(`[Leaderboard] Player entity not found for ID ${playerId} in playerScores.`);
       }
     }
+    
+    // --- LOGGING: Leaderboard Entries Before Sort --- 
+    // console.log(`[Leaderboard] Entries before sort:`, JSON.stringify(entries)); // Can be verbose
     
     // Sort by score in descending order
     entries.sort((a, b) => b.score - a.score);
@@ -202,13 +231,20 @@ startServer((world: World) => {
     // Update the leaderboard data
     leaderboardData = entries;
     
+    // --- LOGGING: Leaderboard Data After Sort --- 
+    // console.log(`[Leaderboard] Data after sort:`, JSON.stringify(leaderboardData)); // <<< COMMENTED OUT
+    
     // Send updated leaderboard to all connected players
     for (const playerEntity of playerEntities.values()) {
+      // --- LOGGING: Sending Leaderboard to Player --- 
+      // console.log(`[Leaderboard] Sending update to ${playerEntity.player.username}`); // Can be verbose
       playerEntity.player.ui.sendData({
         type: 'updateLeaderboard',
         leaderboard: leaderboardData
       });
     }
+    // --- LOGGING: Leaderboard Update End --- 
+    // console.log(`[Leaderboard] Update complete.`); // Can be verbose
   };
   
   // --- Tower Simulator Constants ---
@@ -240,13 +276,18 @@ startServer((world: World) => {
 
   // --- Tower Simulator Player State ---
   // Tracks how many blocks a player can place
-  const playerBlockResources: Map<string, number> = new Map(); 
+  const playerBlockResources = new Map<string, number>(); // Track blocks for tower building
+
+  // --- ADDED: Map to track player build speed multipliers ---
+  const playerMultipliers = new Map<string, number>();
+  // --- END ADDED ---
 
   // MODIFIED: Tracks tower state including location and progress per player
   interface PlayerTowerState {
     location: TowerLocation;
     currentY: number;
     layerIndex: number;
+    isHovering: boolean; // <<< ADDED: Track hover state
   }
   const playerTowerData: Map<string, PlayerTowerState> = new Map();
 
@@ -315,64 +356,220 @@ startServer((world: World) => {
   const updatePetMovement = (pet: Entity, playerEntity: PlayerEntity, walkAnimation: string, idleAnimation: string) => {
     const petPos = pet.position;
     const playerPos = playerEntity.position;
-    
-    // Calculate direction vector ONLY in the XZ plane
-    const dirX = playerPos.x - petPos.x;
-    // const dirY = playerPos.y - petPos.y; // IGNORE Y for rotation
-    const dirZ = playerPos.z - petPos.z;
-    
-    // Calculate distance in the XZ plane
-    const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
-    
-    // Only follow and rotate if not too close to avoid jittering
-    if (distance > 1.5) {
-      // Calculate the angle from pet to player ONLY in the XZ plane
-      // Add Math.PI to rotate by 180 degrees, aligning the model's -Z axis forward
-      const angle = Math.atan2(dirX, dirZ) + Math.PI;
-      
-      // Convert the angle to a quaternion for Y-axis rotation (yaw)
-      const halfAngle = angle / 2;
-      const qy = Math.sin(halfAngle);
-      const qw = Math.cos(halfAngle);
-      
-      // Apply rotation to make the pet face the player horizontally
-      // Keep X and Z rotation 0 to prevent pitching/rolling
-      pet.setRotation({ x: 0, y: qy, z: 0, w: qw });
 
-      // Normalize XZ direction vector for movement
-      const normalizedDirX = dirX / distance;
-      const normalizedDirZ = dirZ / distance;
-      
-      // Move pet towards player with a speed based on XZ distance
-      const speed = Math.min(distance * 0.1, 0.5);
+    // --- MODIFIED: Added specific logic for Doge Dog --- 
+    if (pet.modelUri === DIAMOND_PET_MODEL_URI) {
+      // --- Doge Dog Flying Logic ---
+      const targetPos = { x: playerPos.x, y: playerPos.y + PET_HOVER_OFFSET_Y, z: playerPos.z };
+      const dirX = targetPos.x - petPos.x;
+      const dirY = targetPos.y - petPos.y;
+      const dirZ = targetPos.z - petPos.z;
+      const distance = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
 
-      // --- Vertical Movement (Keep Y Velocity 0 for ground pets) ---
-      const velocityY = 0; // Default: no vertical velocity
-      // REMOVED: Bat-specific hover logic
-      // if (pet.modelUri === SILVER_PET_MODEL_URI) { ... }
-      // --- End Vertical Movement ---
+      // Only move if not very close to the target hover position
+      if (distance > 0.2) { 
+        const speed = Math.min(distance * 0.4, 1.5); // Adjusted speed factors for flying
+        const normalizedDirX = dirX / distance;
+        const normalizedDirY = dirY / distance;
+        const normalizedDirZ = dirZ / distance;
+        pet.setLinearVelocity({ 
+          x: normalizedDirX * speed * 10,
+          y: normalizedDirY * speed * 10, // Apply Y velocity for flying
+          z: normalizedDirZ * speed * 10,
+        });
+      } else {
+        // Hover gently when close enough
+        pet.setLinearVelocity({ x: 0, y: 0.1, z: 0 }); // Slight upward drift to counteract gravity/jitter
+      }
+      // No rotation or animation changes needed for spinning Doge Dog
+      // --- End Doge Dog Flying Logic ---
 
-      // Apply velocity primarily in XZ, Y should be 0 unless gravity acts
-      pet.setLinearVelocity({
-        x: normalizedDirX * speed * 10,
-        y: velocityY,
-        z: normalizedDirZ * speed * 10,
-      });
+    // --- ADDED: Bat Flying Logic --- 
+    } else if (pet.modelUri === BAT_MODEL_URI) {
+      // --- MODIFIED: Calculate target position *behind* the player --- 
+      const playerForward = playerEntity.directionFromRotation; // Get player's forward direction vector
+      const backwardOffset = 0.8; // How far behind the player the bat should follow
+      const targetX = playerPos.x - playerForward.x * backwardOffset;
+      const targetY = playerPos.y + PET_HOVER_OFFSET_Y + 0.2; // Keep vertical offset
+      const targetZ = playerPos.z - playerForward.z * backwardOffset;
+      const targetPos = { x: targetX, y: targetY, z: targetZ }; 
+      // const targetPos = { x: playerPos.x, y: playerPos.y + PET_HOVER_OFFSET_Y + 0.2, z: playerPos.z }; // OLD: Directly above
+      // --- END MODIFIED --- 
+      const dirX = targetPos.x - petPos.x;
+      const dirY = targetPos.y - petPos.y;
+      const dirZ = targetPos.z - petPos.z;
+      const distance = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
 
-      // Play movement animation (walk/hop/fly etc.)
-      pet.stopModelAnimations([idleAnimation]); 
-      pet.startModelLoopedAnimations([walkAnimation]); // <<< USE walkAnimation
+      if (distance > 0.5) { // Increased stop distance slightly for bat
+        const speed = Math.min(distance * 0.5, 1.8); // Slightly different speed profile
+        const normalizedDirX = dirX / distance;
+        const normalizedDirY = dirY / distance;
+        const normalizedDirZ = dirZ / distance;
+        pet.setLinearVelocity({ 
+          x: normalizedDirX * speed * 10,
+          y: normalizedDirY * speed * 10, // Y velocity for flying
+          z: normalizedDirZ * speed * 10,
+        });
+
+        // Face the player (only XZ rotation)
+        const xzAngle = Math.atan2(dirX, dirZ) + Math.PI; 
+        const halfAngle = xzAngle / 2;
+        pet.setRotation({ x: 0, y: Math.sin(halfAngle), z: 0, w: Math.cos(halfAngle) });
+
+        // Start walk/fly animation
+        if (walkAnimation && !pet.modelLoopedAnimations.has(walkAnimation)) {
+            // if (idleAnimation) pet.stopModelAnimations([idleAnimation]); // Don't stop idle if it doesn't exist
+            pet.startModelLoopedAnimations([walkAnimation]); // Use walk/fly animation
+        }
+      } else {
+        // Hover when close
+        pet.setLinearVelocity({ x: 0, y: 0.1, z: 0 }); 
+        pet.setAngularVelocity({ x: 0, y: 0, z: 0 });
+
+        // --- MODIFIED: Start walk/fly animation even when hovering --- 
+        if (walkAnimation && !pet.modelLoopedAnimations.has(walkAnimation)) {
+            // if (idleAnimation) pet.stopModelAnimations([idleAnimation]); // Don't stop idle if it doesn't exist
+            pet.startModelLoopedAnimations([walkAnimation]); // Use walk/fly animation
+        }
+        // --- END MODIFIED ---
+      }
+    // --- End Bat Flying Logic ---
+
+    // --- ADDED: Squid Flying Logic --- 
+    } else if (pet.modelUri === SQUID_MODEL_URI) {
+      const targetPos = { x: playerPos.x, y: playerPos.y + PET_HOVER_OFFSET_Y + 0.5, z: playerPos.z }; // Target point above player head (slightly higher?)
+      const dirX = targetPos.x - petPos.x;
+      const dirY = targetPos.y - petPos.y;
+      const dirZ = targetPos.z - petPos.z;
+      const distance = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+
+      if (distance > 0.6) { // Stop distance for squid
+        const speed = Math.min(distance * 0.6, 2.0); // Different speed profile for squid
+        const normalizedDirX = dirX / distance;
+        const normalizedDirY = dirY / distance;
+        const normalizedDirZ = dirZ / distance;
+        pet.setLinearVelocity({ 
+          x: normalizedDirX * speed * 10,
+          y: normalizedDirY * speed * 10, // Y velocity for flying
+          z: normalizedDirZ * speed * 10,
+        });
+
+        // Face the player (only XZ rotation)
+        const xzAngle = Math.atan2(dirX, dirZ) + Math.PI; 
+        const halfAngle = xzAngle / 2;
+        pet.setRotation({ x: 0, y: Math.sin(halfAngle), z: 0, w: Math.cos(halfAngle) });
+
+        // Start walk/fly animation
+        if (walkAnimation && !pet.modelLoopedAnimations.has(walkAnimation)) {
+            if (idleAnimation) pet.stopModelAnimations([idleAnimation]);
+            pet.startModelLoopedAnimations([walkAnimation]);
+        }
+      } else {
+        // Hover when close
+        pet.setLinearVelocity({ x: 0, y: 0.1, z: 0 }); 
+        pet.setAngularVelocity({ x: 0, y: 0, z: 0 });
+
+        // Start idle animation
+        if (idleAnimation && !pet.modelLoopedAnimations.has(idleAnimation)) {
+            if (walkAnimation) pet.stopModelAnimations([walkAnimation]);
+            pet.startModelLoopedAnimations([idleAnimation]);
+        }
+      }
+    // --- End Squid Flying Logic ---
+
+    // --- ADDED: Payload Bomb Ground Logic ---
+    } else if (pet.modelUri === PAYLOAD_BOMB_MODEL_URI) {
+      const dirX = playerPos.x - petPos.x;
+      const dirZ = playerPos.z - petPos.z;
+      const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
+
+      // Only follow and rotate if not too close
+      if (distance > 2.0) {
+        // Apply specific Payload Bomb rotation (270 degrees offset)
+        const angle = Math.atan2(dirX, dirZ) + Math.PI + (Math.PI / 2); 
+        const halfAngle = angle / 2;
+        pet.setRotation({ x: 0, y: Math.sin(halfAngle), z: 0, w: Math.cos(halfAngle) });
+
+        // Calculate speed based on distance
+        const speed = Math.min(distance * 0.1, 0.5);
+
+        // Animation: Play walk animation
+        if (walkAnimation && !pet.modelLoopedAnimations.has(walkAnimation)) {
+            // No idle animation to stop for payload bomb
+            pet.startModelLoopedAnimations([walkAnimation]);
+        }
+
+        // Apply velocity ONLY in XZ, let gravity handle Y
+        const normalizedDirX = dirX / distance;
+        const normalizedDirZ = dirZ / distance;
+        pet.setLinearVelocity({ 
+            x: normalizedDirX * speed * 10, 
+            y: pet.linearVelocity.y, // <<< IMPORTANT: Keep current Y velocity to allow gravity
+            z: normalizedDirZ * speed * 10 
+        });
+      } else {
+        // Stop horizontal movement when close
+        pet.setLinearVelocity({ x: 0, y: pet.linearVelocity.y, z: 0 }); // <<< Keep Y velocity
+        pet.setAngularVelocity({ x: 0, y: 0, z: 0 }); // Stop rotation
+
+        // Animation: Stop walk animation (since there's no idle)
+        if (walkAnimation && pet.modelLoopedAnimations.has(walkAnimation)) {
+            pet.stopModelAnimations([walkAnimation]);
+        }
+      }
+    // --- End Payload Bomb Ground Logic ---
 
     } else {
-      // Stop horizontal moving when close enough, Y velocity should also be 0
-      // REMOVED: Bat-specific hover logic from else block
-      pet.setLinearVelocity({ x: 0, y: 0, z: 0 });
-      pet.setAngularVelocity({ x: 0, y: 0, z: 0 }); // Ensure angular velocity is zero
+      // --- Existing Generic Ground Pet Logic (for all others) ---
+      const dirX = playerPos.x - petPos.x;
+      const dirZ = playerPos.z - petPos.z;
+      const distance = Math.sqrt(dirX * dirX + dirZ * dirZ);
+      
+      // Only follow and rotate if not too close to avoid jittering
+      if (distance > 2.0) {
+          // Rotate NON-Doge pets
+          if (pet.modelUri !== DIAMOND_PET_MODEL_URI) { // Exclude Doge from default rotation
+            // Calculate the angle from pet to player ONLY in the XZ plane + 180 degrees
+            const angle = Math.atan2(dirX, dirZ) + Math.PI;
+            const halfAngle = angle / 2;
+            pet.setRotation({ x: 0, y: Math.sin(halfAngle), z: 0, w: Math.cos(halfAngle) }); // Apply rotation
+          }
+          
+          // Calculate speed based on distance (move faster when further away)
+          const speed = Math.min(distance * 0.1, 0.5);
 
-      // Play idle animation when not moving (close to player)
-      // Stop walk/fly animation IF it was playing
-      pet.stopModelAnimations([walkAnimation]);
-      pet.startModelLoopedAnimations([idleAnimation]); // Ensure idle animation plays
+          // --- Animation Control --- 
+          if (walkAnimation) { // Check if walk animation exists
+              if (!pet.modelLoopedAnimations.has(walkAnimation)) {
+                  if (idleAnimation) pet.stopModelAnimations([idleAnimation]);
+                  pet.startModelLoopedAnimations([walkAnimation]);
+              }
+          } 
+          // --- End Animation Control ---
+
+          // Apply velocity primarily in XZ, let gravity handle Y
+          const normalizedDirX = dirX / distance;
+          const normalizedDirZ = dirZ / distance;
+          pet.setLinearVelocity({ 
+            x: normalizedDirX * speed * 10, 
+            y: pet.linearVelocity.y, // <<< Allow gravity
+            z: normalizedDirZ * speed * 10 
+          });
+
+      } else {
+          // Stop horizontal moving when close enough
+          pet.setLinearVelocity({ x: 0, y: pet.linearVelocity.y, z: 0 }); // <<< Allow gravity
+          pet.setAngularVelocity({ x: 0, y: 0, z: 0 }); // Ensure non-Doge pets stop spinning when close
+
+          // Play idle animation when not moving (close to player)
+          if (idleAnimation) { // Check if idle animation exists
+              if (!pet.modelLoopedAnimations.has(idleAnimation)) {
+                  if (walkAnimation) pet.stopModelAnimations([walkAnimation]);
+                  pet.startModelLoopedAnimations([idleAnimation]);
+              }
+          }
+      }
+      // --- End Generic Ground Pet Logic ---
     }
   };
 
@@ -381,109 +578,132 @@ startServer((world: World) => {
     const resources = playerBlockResources.get(playerId);
     const towerData = playerTowerData.get(playerId);
 
-    // Check if player has tower data and resources
-    if (!towerData || resources === undefined || resources < 1) {
-       // Add warning log if build cannot proceed
-       // console.warn(`[TowerBuild][WARN] Player ${playerId} cannot build. Has towerData: ${!!towerData}, Resources: ${resources}`); // DEBUG
+    // Check if player has tower data
+    if (!towerData) {
       return; // Cannot build
     }
 
-    // Use towerData.location for calculations
-    const towerWidth = towerData.location.width;
-    const towerDepth = towerData.location.depth;
-    const blocksPerLayer = towerWidth * towerDepth;
+    // --- MODIFIED: Calculate points and loop block placement --- 
+    const currentScore = playerScores.get(playerId) ?? 0;
+    const multiplier = playerMultipliers.get(playerId) ?? MULTIPLIER_DEFAULT;
+    const pointsPerTick = Math.max(1, Math.round(1 * multiplier)); // Calculate points (minimum 1)
+    let pointsAwardedThisTick = 0;
 
-    // Calculate the position of the next block in the current layer
-    const layerX = towerData.layerIndex % towerWidth;
-    const layerZ = Math.floor(towerData.layerIndex / towerWidth);
+    // console.log(`[TowerBuild][TICK] Player: ${playerId}, Multiplier: ${multiplier.toFixed(1)}x, Blocks to place: ${pointsPerTick}`); // <<< COMMENTED OUT
 
-    // Use the center from the player's assigned tower location
-    const blockX = towerData.location.center.x - (towerWidth / 2 - 0.5) + layerX;
-    const blockY = towerData.currentY;
-    const blockZ = towerData.location.center.z - (towerDepth / 2 - 0.5) + layerZ;
+    for (let i = 0; i < pointsPerTick; i++) {
+      // Calculate block position based on the *current* tower state
+      const towerWidth = towerData.location.width;
+      const towerDepth = towerData.location.depth;
+      const blocksPerLayer = towerWidth * towerDepth;
 
-    // Determine the block type based on position (Stone corners, Wood inside)
-    const isCorner = (layerX === 0 || layerX === towerWidth - 1) && (layerZ === 0 || layerZ === towerDepth - 1);
-    const blockTypeId = isCorner ? STONE_BLOCK_ID : WOOD_BLOCK_ID; // <-- Restore original logic
-    // const blockTypeId = STONE_BLOCK_ID; // <-- TEMPORARY TEST: Use only stone 
-
-    // Explicitly floor X and Z coordinates to ensure integer values for setBlock
-    const flooredX = Math.floor(blockX);
-    const flooredZ = Math.floor(blockZ);
-
-    // --- DEBUG LOGGING --- 
-    // console.log(`[TowerBuild] Player: ${playerId}, Center: (${towerData.location.center.x.toFixed(1)}, ${towerData.location.center.z.toFixed(1)}), LayerIndex: ${towerData.layerIndex}, BlockPos: (${flooredX}, ${blockY.toFixed(1)}, ${flooredZ}), Type: ${blockTypeId}`); // DEBUG
-
-    // --- Place the actual block instantly ---
-    const targetBlockPos = new Vector3(flooredX, blockY, flooredZ); // Use floored coordinates
-    world.chunkLattice.setBlock(targetBlockPos, blockTypeId);
-
-    // --- Visual Effect: Spawn flying orb --- 
-    const playerEntity = playerEntities.get(playerId);
-    if (playerEntity) {
-      // Correctly create copies of Vector3 instances
-      const startPos = new Vector3(playerEntity.position.x, playerEntity.position.y + 0.5, playerEntity.position.z); // Start slightly above player center
-      const endPos = new Vector3(targetBlockPos.x + 0.5, targetBlockPos.y + 0.5, targetBlockPos.z + 0.5); // Target center of block
-      const travelDuration = 0.3; // seconds
-      
-      // Calculate direction and distance
-      const direction = new Vector3(endPos.x - startPos.x, endPos.y - startPos.y, endPos.z - startPos.z);
-      const distance = direction.length;
-      direction.normalize(); // Make it a unit vector
-      
-      // Calculate required velocity
-      const speed = distance / travelDuration;
-      // Correctly create a copy for velocity calculation
-      const velocity = new Vector3(direction.x * speed, direction.y * speed, direction.z * speed);
-
-      // Create and spawn the visual orb entity
-      const orbVisual = new Entity({
-        modelUri: 'models/projectiles/energy-orb-projectile.gltf',
-        modelScale: 0.3, // Scale it down a bit
-        rigidBodyOptions: {
-          type: RigidBodyType.KINEMATIC_VELOCITY, // Moves based on velocity, ignores physics
-          linearVelocity: velocity, // Set the calculated velocity
-          // Add a simple sensor collider to prevent physical interactions
-          colliders: [{
-            shape: ColliderShape.BALL, // Simple shape for the orb visual
-            radius: 0.2, // Small radius for the visual effect
-            isSensor: true // *** Make it a sensor ***
-          }]
-        }
-      });
-      orbVisual.spawn(world, startPos);
-
-      // Despawn the orb after the travel duration
-      setTimeout(() => {
-        orbVisual.despawn();
-      }, travelDuration * 1000); // Convert seconds to milliseconds
-    }
-    // --- End Visual Effect ---
-
-    // Decrement resources
-    playerBlockResources.set(playerId, resources - 1);
-
-    // Update progress
-    towerData.layerIndex++;
-    if (towerData.layerIndex >= blocksPerLayer) {
-      towerData.layerIndex = 0;
-      towerData.currentY++; // Move up to the next level
-
-      // Update Floor Display UI
-      const floorDisplayUI = playerFloorDisplayUIs.get(playerId);
-      if (floorDisplayUI) {
-        // Assuming base Y is layer 0, floor = currentY - baseY + 1
-        // Use the specific tower's base Y for accurate floor calculation
-        const currentFloor = towerData.currentY - towerData.location.center.y + 1;
-        floorDisplayUI.setState({ floor: currentFloor });
+      // If layerIndex is 0, it means we need to start a new layer
+      if (towerData.layerIndex === 0 && towerData.currentY > towerData.location.center.y) {
+        // This check prevents incrementing Y if we are at the very start (Y=center, index=0)
+        // Safety check: ensure we don't place blocks below base
+        // Although the loop termination should prevent this, it adds safety.
+        // Removed the check as the main loop condition handles it.
       }
-      // Add info log for layer completion
-      // console.log(`[TowerBuild][INFO] Player ${playerId} completed layer. Reset layerIndex to 0. New Y: ${towerData.currentY}`); // DEBUG
+      // If we completed a layer in the *previous* iteration of this loop
+      if (towerData.layerIndex >= blocksPerLayer) {
+        towerData.layerIndex = 0;
+        towerData.currentY++;
+        const floorDisplayUI = playerFloorDisplayUIs.get(playerId);
+        if (floorDisplayUI) {
+          const currentFloor = towerData.currentY - towerData.location.center.y + 1;
+          floorDisplayUI.setState({ floor: currentFloor });
+        }
+        // console.log(`[TowerBuild][LAYER UP] Player: ${playerId}, New Y: ${towerData.currentY}`); // <<< COMMENTED OUT
+      }
+
+      // Calculate position for the *current* block within the loop
+      const layerX = towerData.layerIndex % towerWidth;
+      const layerZ = Math.floor(towerData.layerIndex / towerWidth);
+      const blockX = towerData.location.center.x - (towerWidth / 2 - 0.5) + layerX;
+      const blockY = towerData.currentY; // Use the potentially updated Y
+      const blockZ = towerData.location.center.z - (towerDepth / 2 - 0.5) + layerZ;
+      const isCorner = (layerX === 0 || layerX === towerWidth - 1) && (layerZ === 0 || layerZ === towerDepth - 1);
+      const blockTypeId = isCorner ? STONE_BLOCK_ID : WOOD_BLOCK_ID;
+      const flooredX = Math.floor(blockX);
+      const flooredZ = Math.floor(blockZ);
+      const targetBlockPos = new Vector3(flooredX, blockY, flooredZ);
+
+      // Place the actual block
+      world.chunkLattice.setBlock(targetBlockPos, blockTypeId);
+      pointsAwardedThisTick++; // Count this block/point
+
+      // Update tower state for the *next* iteration or tick
+      towerData.layerIndex++; 
+      
+      // Spawn visual effect (optional, can be kept or removed)
+      const playerEntity = playerEntities.get(playerId);
+      if (playerEntity) {
+          const startPos = new Vector3(playerEntity.position.x, playerEntity.position.y + 0.5, playerEntity.position.z);
+          const endPos = new Vector3(targetBlockPos.x + 0.5, targetBlockPos.y + 0.5, targetBlockPos.z + 0.5);
+          // Orb logic unchanged...
+          const travelDuration = 0.3;
+          const direction = new Vector3(endPos.x - startPos.x, endPos.y - startPos.y, endPos.z - startPos.z);
+          const distance = direction.length;
+          direction.normalize(); 
+          const speed = distance / travelDuration;
+          const velocity = new Vector3(direction.x * speed, direction.y * speed, direction.z * speed);
+          const orbVisual = new Entity({
+            modelUri: 'models/projectiles/energy-orb-projectile.gltf',
+            modelScale: 0.3, 
+            rigidBodyOptions: {
+              type: RigidBodyType.KINEMATIC_VELOCITY, 
+              linearVelocity: velocity, 
+              colliders: [{ shape: ColliderShape.BALL, radius: 0.2, isSensor: true }]
+            }
+          });
+          orbVisual.spawn(world, startPos);
+          setTimeout(() => { orbVisual.despawn(); }, travelDuration * 1000);        
+      }
     }
 
-    // Save the updated progress
-    playerTowerData.set(playerId, towerData); // Save the modified towerData back to the map
+    // Update score AFTER the loop with the total points/blocks placed this tick
+    playerScores.set(playerId, currentScore + pointsAwardedThisTick);
+    // console.log(`[Points] Player ${playerId} got ${pointsAwardedThisTick} points this tick (Multiplier: ${multiplier.toFixed(1)}x)`); // <<< COMMENTED OUT
+    updateLeaderboard(); // Update the leaderboard display
+    
+    // Save the final tower state after placing all blocks for this tick
+    playerTowerData.set(playerId, towerData); 
+    // --- END MODIFIED ---
+
+    // --- ADDED: Update player position if hovering ---
+    updateHoveringPlayerPosition(playerId);
+    // --- END ADDED ---
   };
+
+  // --- ADDED: Function to start/update tower building interval ---
+  const startOrUpdateTowerBuilding = (playerId: string) => {
+    // Clear existing interval if it exists
+    const existingInterval = playerBlockIntervals.get(`tower_${playerId}`);
+    if (existingInterval) {
+      clearInterval(existingInterval);
+    }
+
+    // Get player's multiplier (default to 1)
+    const multiplier = playerMultipliers.get(playerId) ?? 1.0;
+
+    // --- MODIFIED: Use BASE interval, multiplier affects amount per tick ---
+    // Calculate effective interval duration (base interval / multiplier)
+    const BASE_TOWER_BUILD_INTERVAL_MS = 400; // <<< CHANGED: Slower base speed (was 200)
+    // const effectiveInterval = Math.max(50, BASE_TOWER_BUILD_INTERVAL_MS / multiplier); // Ensure interval doesn't go too low (e.g., max 20 blocks/sec)
+    const effectiveInterval = BASE_TOWER_BUILD_INTERVAL_MS; // Always use base interval
+    // --- END MODIFIED ---
+
+    // console.log(`[TowerBuild][INFO] Starting tower build for ${playerId} with multiplier ${multiplier.toFixed(1)}x, interval ${effectiveInterval.toFixed(0)}ms (Amount per tick modified)`); // <<< COMMENTED OUT // Log updated
+
+    // Start new interval
+    const newIntervalId = setInterval(() => {
+      tryBuildTowerBlock(playerId);
+    }, effectiveInterval);
+
+    // Store the new interval ID
+    playerBlockIntervals.set(`tower_${playerId}`, newIntervalId);
+  };
+  // --- END ADDED ---
 
   // --- Animal Constants ---
   const RABBIT_MODEL_URI = 'models/npcs/rabbit.gltf';
@@ -505,7 +725,6 @@ startServer((world: World) => {
     openStartTime: number | null;
     openingPlayerId: string | null;
     animationTime: number;
-    playersInRange: Set<string>; // ADDED: Track players near this egg
     eggType: EggType;
   }
 
@@ -518,14 +737,15 @@ startServer((world: World) => {
   const EGG_FLOAT_AMPLITUDE = 0.05; // How high/low it floats (more subtle)
   const EGG_FLOAT_SPEED = 0.5; // How fast it floats (radians per second) - Slower for smoothness
   const EGG_ROTATE_SPEED = 0.5; // How fast it rotates (radians per second)
-  const EGG_RESPAWN_DELAY_MS = 10000; // 10 seconds
+  const EGG_RESPAWN_DELAY_MS = 6000; // 6 seconds
 
   /**
    * Handle the tick event for an individual egg entity.
-   * This function manages the opening animation and despawning.
-   * It also handles showing/hiding the proximity prompt for nearby players.
+   * This function ONLY manages the opening animation, despawning, 
+   * and floating/spinning visual state.
+   * Proximity checks are now handled centrally in the player tick loop.
    */
-  const handleEggTick = (payload: { entity: Entity; tickDeltaMs: number; }) => {
+  const handleEggTick = async (payload: { entity: Entity; tickDeltaMs: number; }) => { // <<< Make async
     const { entity, tickDeltaMs } = payload;
     
     // Ensure the log message is commented out
@@ -546,102 +766,41 @@ startServer((world: World) => {
       return;
     }
 
-    // --- ADDED: Proximity Check for Egg Prompt --- 
-    const eggPosition = entity.position; 
-    const currentTickInRange = new Set<string>();
-    // Use the existing playerEntities map to get PlayerEntity instances
-    const allPlayerEntities = playerEntities.values();
-
-    for (const playerEntity of allPlayerEntities) {
-      // Ensure playerEntity and its position are valid before calculating distance
-      if (!playerEntity || !playerEntity.position) {
-          console.warn(`Skipping proximity check for invalid player entity.`);
-          continue; // Skip this player if invalid
-      }
-      const playerPosition = playerEntity.position;
-      const distance = calculateDistance(eggPosition, playerPosition);
-
-      if (distance <= EGG_PROMPT_DISTANCE) {
-        const playerId = playerEntity.player.id;
-        currentTickInRange.add(playerId);
-        // If player just entered range, show the correct prompt based on egg type
-        if (!eggState.playersInRange.has(playerId)) {
-          // --- Check egg type and send appropriate message ---
-          if (eggState.modelUri === ORIGINAL_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} ENTERED range of ORIGINAL egg ${entity.id}. Sending visible=true.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateChickenEggPrompt', visible: true }); 
-          } else if (eggState.modelUri === SILVER_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} ENTERED range of SILVER egg ${entity.id}. Sending visible=true.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateSilverEggPrompt', visible: true }); 
-          } else if (eggState.modelUri === GOLDEN_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} ENTERED range of GOLDEN egg ${entity.id}. Sending visible=true.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateGoldenEggPrompt', visible: true }); 
-          } else if (eggState.modelUri === DIAMOND_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} ENTERED range of DIAMOND egg ${entity.id}. Sending visible=true.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateDiamondEggPrompt', visible: true }); 
-          }
-        }
-      }
-    }
-
-    // Check for players who moved out of range
-    for (const playerId of eggState.playersInRange) {
-      if (!currentTickInRange.has(playerId)) {
-        // Get the PlayerEntity from the map
-        const playerEntity = playerEntities.get(playerId); 
-        if (playerEntity) {
-          // --- Check egg type and send appropriate message to hide prompt ---
-          if (eggState.modelUri === ORIGINAL_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} LEFT range of ORIGINAL egg ${entity.id}. Sending visible=false.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateChickenEggPrompt', visible: false }); 
-          } else if (eggState.modelUri === SILVER_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} LEFT range of SILVER egg ${entity.id}. Sending visible=false.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateSilverEggPrompt', visible: false }); 
-          } else if (eggState.modelUri === GOLDEN_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} LEFT range of GOLDEN egg ${entity.id}. Sending visible=false.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateGoldenEggPrompt', visible: false }); 
-          } else if (eggState.modelUri === DIAMOND_EGG_MODEL_URI) {
-            console.log(`[UI PROMPT] Player ${playerId} LEFT range of DIAMOND egg ${entity.id}. Sending visible=false.`); // DETAILED LOG
-            playerEntity.player.ui.sendData({ type: 'updateDiamondEggPrompt', visible: false }); 
-          }
-        }
-      }
-    }
-
-    // Update the set of players currently in range for the next tick
-    eggState.playersInRange = currentTickInRange;
-    // --- END ADDED: Proximity Check --- 
-    // } // <-- REMOVED THIS LINE
-    // --- End ORIGINAL egg specific check --- // <-- Updated comment
-
     // --- General Egg Logic (Floating, Opening) applies to ALL eggs --- 
     const deltaTimeS = tickDeltaMs / 1000.0;
     eggState.animationTime += deltaTimeS;
 
+    // Initialize default values
     let currentRotateSpeed = EGG_ROTATE_SPEED;
-    // Initialize position based on floating calculation using the egg's specific base position
-    let currentPositionVec = new Vector3(
-      eggState.basePosition.x,
-      eggState.basePosition.y + Math.sin(eggState.animationTime * EGG_FLOAT_SPEED) * EGG_FLOAT_AMPLITUDE,
-      eggState.basePosition.z
-    );
+    let currentShakeAmplitude = 0; // No shake by default
 
     // --- Handle Opening Sequence ---
     if (eggState.isOpening && eggState.openStartTime) {
       const elapsedTime = Date.now() - eggState.openStartTime;
+      const openingProgress = Math.min(elapsedTime / EGG_OPEN_DURATION_MS, 1); // 0 to 1
+
+      // --- Apply Opening Animation Effects ---
+      currentRotateSpeed = EGG_ROTATE_SPEED * (1 + openingProgress * 2); // Spin faster as it opens
+      currentShakeAmplitude = EGG_SHAKE_AMPLITUDE * Math.sin(elapsedTime * 0.05);
+      // --- End Opening Animation Effects ---
 
       // --- Check if hatching time is reached ---
       if (elapsedTime >= EGG_OPEN_DURATION_MS) {
         console.log(`Egg (${entity.id}, Type: ${eggState.eggType}) hatching!`); // Log type
         const hatchPosition = entity.position; // Get position before despawning
-        const openingPlayerEntity = playerEntities.get(eggState.openingPlayerId || ''); // Get player who opened
+        const openingPlayerId = eggState.openingPlayerId;
+        const openingPlayerEntity = playerEntities.get(openingPlayerId || ''); // Get player who opened
+        const originalEggId = entity.id; // <<< CAPTURE ID BEFORE DESPAWN
+        
+        // Remove the problematic reference to player
+        // const player = ...
 
         // Despawn egg and remove its state
         entity.despawn();
-        if (typeof entity.id === 'number') {
-          activeEggs.delete(entity.id);
+        if (typeof originalEggId === 'number') { // <<< USE CAPTURED ID
+          activeEggs.delete(originalEggId);
         } else {
-          console.warn("Could not delete egg state: Invalid entity ID after despawn.");
+          console.warn("Could not delete egg state: Captured originalEggId was not a number."); // Updated warning
         }
 
         // --- Determine which animal hatches based on eggType ---
@@ -649,33 +808,142 @@ startServer((world: World) => {
         let petScale: number;
         let petIdleAnimation: string;
         let petWalkAnimation: string;
-        let petTypeName: string; // For logging/messages
+        let petTypeName: string;
 
         switch (eggState.eggType) {
           case EggType.SILVER:
-            petModelUri = SILVER_PET_MODEL_URI;
-            petScale = SILVER_PET_SCALE;
-            petIdleAnimation = SILVER_PET_IDLE_ANIMATION;
-            petWalkAnimation = SILVER_PET_WALK_ANIMATION;
-            petTypeName = 'Sheep';
-            console.log(`Silver Egg hatched a Sheep!`);
+            // --- MODIFIED: Percentage-Based Silver Pet Hatching ---
+            const silverRoll = Math.random() * 100;
+
+            if (silverRoll < 50) { // 0 - 49.99... (50% chance - Cow)
+                petModelUri = COW_MODEL_URI;
+                petScale = COW_MODEL_SCALE;
+                petIdleAnimation = COW_IDLE_ANIMATION;
+                petWalkAnimation = COW_WALK_ANIMATION;
+                petTypeName = 'Cow';
+                console.log(`Silver Egg hatched a Cow! (Roll: ${silverRoll.toFixed(2)} < 50)`);
+            } else if (silverRoll < 86) { // 50 - 85.99... (36% chance - Bat)
+                petModelUri = BAT_MODEL_URI;
+                petScale = BAT_MODEL_SCALE;
+                petIdleAnimation = BAT_IDLE_ANIMATION;
+                petWalkAnimation = BAT_WALK_ANIMATION;
+                petTypeName = 'Bat';
+                console.log(`Silver Egg hatched a Bat! (Roll: ${silverRoll.toFixed(2)} < 86)`);
+            } else { // 86 - 99.99... (14% chance - Sheep)
+                petModelUri = SHEEP_MODEL_URI;
+                petScale = SHEEP_MODEL_SCALE;
+                petIdleAnimation = SHEEP_IDLE_ANIMATION;
+                petWalkAnimation = SHEEP_WALK_ANIMATION;
+                petTypeName = 'Sheep';
+                console.log(`Silver Egg hatched a Sheep! (Roll: ${silverRoll.toFixed(2)} >= 86)`);
+            }
+            // --- END MODIFIED ---
+            break;
+          case EggType.GOLDEN:
+            // --- MODIFIED: Percentage-Based Golden Pet Hatching ---
+            const goldenRoll = Math.random() * 100;
+            
+            if (goldenRoll < 61.5) { // 0 - 61.49... (61.5% chance - Donkey)
+                petModelUri = DONKEY_MODEL_URI;
+                petScale = DONKEY_MODEL_SCALE;
+                petIdleAnimation = DONKEY_IDLE_ANIMATION;
+                petWalkAnimation = DONKEY_WALK_ANIMATION;
+                petTypeName = 'Donkey';
+                console.log(`Golden Egg hatched a Donkey! (Roll: ${goldenRoll.toFixed(2)} < 61.5)`);
+            } else if (goldenRoll < 89.8) { // 61.5 - 89.79... (28.3% chance - Squid)
+                petModelUri = SQUID_MODEL_URI;
+                petScale = SQUID_MODEL_SCALE;
+                petIdleAnimation = SQUID_IDLE_ANIMATION;
+                petWalkAnimation = SQUID_WALK_ANIMATION; // Will be treated as flying
+                petTypeName = 'Squid';
+                console.log(`Golden Egg hatched a Squid! (Roll: ${goldenRoll.toFixed(2)} < 89.8)`);
+            } else { // 89.8 - 99.99... (10.2% chance - Ocelot)
+                petModelUri = OCELOT_MODEL_URI;
+                petScale = OCELOT_MODEL_SCALE;
+                petIdleAnimation = OCELOT_IDLE_ANIMATION;
+                petWalkAnimation = OCELOT_WALK_ANIMATION;
+                petTypeName = 'Ocelot';
+                console.log(`Golden Egg hatched an Ocelot! (Roll: ${goldenRoll.toFixed(2)} >= 89.8)`);
+            }
+            // --- END MODIFIED ---
+            break;
+          case EggType.DIAMOND:
+            // --- MODIFIED: Percentage-Based Diamond Pet Hatching ---
+            const diamondRoll = Math.random() * 100;
+            
+            if (diamondRoll < 75) { // 0 - 74.99... (75% chance - Spider)
+                petModelUri = SPIDER_MODEL_URI;
+                petScale = SPIDER_MODEL_SCALE;
+                petIdleAnimation = SPIDER_IDLE_ANIMATION;
+                petWalkAnimation = SPIDER_WALK_ANIMATION;
+                petTypeName = 'Spider';
+                console.log(`Diamond Egg hatched a Spider! (Roll: ${diamondRoll.toFixed(2)} < 75)`);
+            } else if (diamondRoll < 95) { // 75 - 94.99... (20% chance - Payload Bomb)
+                // --- Use Payload Bomb Constants ---
+                petModelUri = PAYLOAD_BOMB_MODEL_URI;
+                petScale = PAYLOAD_BOMB_SCALE;
+                petIdleAnimation = ''; // No idle animation for payload bomb
+                petWalkAnimation = PAYLOAD_BOMB_WALK_ANIMATION;
+                // --- End Payload Bomb Constants ---
+                petTypeName = 'Payload Bomb';
+                console.log(`Diamond Egg hatched a Payload Bomb! (Roll: ${diamondRoll.toFixed(2)} < 95)`);
+            } else { // 95 - 99.99... (5% chance - Doge Dog / DD)
+                // --- Use DD (DIAMOND_PET_) Constants ---
+                petModelUri = DIAMOND_PET_MODEL_URI;
+                petScale = DIAMOND_PET_SCALE;
+                petIdleAnimation = DIAMOND_PET_IDLE_ANIMATION;
+                petWalkAnimation = DIAMOND_PET_WALK_ANIMATION;
+                // --- End Correction ---
+                petTypeName = 'DD'; // Renamed to DD
+                console.log(`Diamond Egg hatched a DD! (Roll: ${diamondRoll.toFixed(2)} >= 95)`);
+            }
+            // --- END MODIFIED ---
             break;
           case EggType.BASIC:
           default:
-            petModelUri = BASIC_PET_MODEL_URI;
-            petScale = BASIC_PET_SCALE;
-            petIdleAnimation = BASIC_PET_IDLE_ANIMATION;
-            petWalkAnimation = BASIC_PET_WALK_ANIMATION;
-            petTypeName = 'Rabbit';
-            console.log(`Basic Egg hatched a Rabbit!`);
+            // --- MODIFIED: Percentage-Based Basic Pet Hatching ---
+            const roll = Math.random() * 100; // Generate random number 0-99.99...
+            
+            if (roll < 50) { // 0 - 49.99... (50% chance)
+                petModelUri = CHICKEN_MODEL_URI;
+                petScale = CHICKEN_MODEL_SCALE;
+                petIdleAnimation = CHICKEN_IDLE_ANIMATION;
+                petWalkAnimation = CHICKEN_WALK_ANIMATION;
+                petTypeName = 'Chicken';
+                console.log(`Basic Egg hatched a Chicken! (Roll: ${roll.toFixed(2)} < 50)`);
+            } else if (roll < 80) { // 50 - 79.99... (30% chance)
+                petModelUri = BASIC_PET_MODEL_URI; // Rabbit is basic
+                petScale = BASIC_PET_SCALE;
+                petIdleAnimation = BASIC_PET_IDLE_ANIMATION;
+                petWalkAnimation = BASIC_PET_WALK_ANIMATION;
+                petTypeName = 'Rabbit';
+                console.log(`Basic Egg hatched a Rabbit! (Roll: ${roll.toFixed(2)} < 80)`);
+            } else { // 80 - 99.99... (20% chance)
+                petModelUri = PIG_MODEL_URI;
+                petScale = PIG_MODEL_SCALE;
+                petIdleAnimation = PIG_IDLE_ANIMATION;
+                petWalkAnimation = PIG_WALK_ANIMATION;
+                petTypeName = 'Pig';
+                console.log(`Basic Egg hatched a Pig! (Roll: ${roll.toFixed(2)} >= 80)`);
+            }
+            // --- END MODIFIED ---
             break;
         }
 
-        // --- Calculate Spawn Position (Should be same as hatchPosition for Cow) ---
-        const spawnPosition = hatchPosition; // Use hatch position directly
-        const verticalNudge = 0; // No vertical nudge for ground pets
-        // REMOVED: Bat-specific height adjustment
-        // if (petTypeName === 'Cow') { ... }
+        // --- Calculate Spawn Position --- 
+        // const spawnPosition = hatchPosition; // OLD: Spawned at exact hatch location
+        // --- ADDED: Add a small random horizontal offset to prevent stacking on spawn ---
+        const spawnOffsetRadius = 0.3; // Max distance from original hatch point (adjust as needed)
+        const randomAngle = Math.random() * Math.PI * 2; // Random direction
+        const offsetX = Math.cos(randomAngle) * spawnOffsetRadius;
+        const offsetZ = Math.sin(randomAngle) * spawnOffsetRadius;
+        const spawnPosition = {
+            x: hatchPosition.x + offsetX,
+            y: hatchPosition.y, // Keep original Y level
+            z: hatchPosition.z + offsetZ,
+        };
+        // --- END ADDED ---
+        const verticalNudge = 0; 
 
         // --- Spawn the chosen animal ---
         const newPet = new Entity({
@@ -683,8 +951,10 @@ startServer((world: World) => {
           modelScale: petScale,
           rigidBodyOptions: {
             type: RigidBodyType.DYNAMIC,
-            enabledRotations: { x: false, y: true, z: false },
+            // --- REMOVED incorrect collisionGroups setting here ---
           },
+          modelLoopedAnimations: petIdleAnimation ? [petIdleAnimation] : [], // Start idle if exists
+          // No controller needed here, added in makePetFollow
         });
 
         // Initialize follow state for the new pet
@@ -695,114 +965,296 @@ startServer((world: World) => {
         };
         petFollowStates.set(newPet, petFollowState);
 
-        // Spawn pet at the hatch position
-        newPet.spawn(world, spawnPosition);
-        console.log(`${petTypeName} spawned at:`, spawnPosition);
+        // Spawn pet at the *offset* position
+        newPet.spawn(world, spawnPosition); // Use the calculated offset position
+        // console.log(`${petTypeName} spawned at:`, spawnPosition); // OLD LOG
+        console.log(`${petTypeName} spawned at offset position: (${spawnPosition.x.toFixed(2)}, ${spawnPosition.y.toFixed(2)}, ${spawnPosition.z.toFixed(2)})`); // UPDATE LOG
 
-        // Apply nudge (horizontal only for Cow)
+        // --- ADDED: Persistence Logic for Owned Pets List ---
+        let successFullyPersisted = false; // Flag to track if persistence succeeded
+        if (openingPlayerEntity && newPet.id !== undefined) { // Ensure player and new pet ID exist
+            try {
+                console.log(`[DEBUG] Starting pet persistence for player ${openingPlayerEntity.player.username}`);
+                
+                // 1. Generate a unique persistent ID for this pet instance
+                const persistentPetId = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+                console.log(`[DEBUG] Generated persistent ID: ${persistentPetId}`);
+
+                // 2. Fetch the current list of owned pets (or initialize if none)
+                const currentData = await openingPlayerEntity.player.getPersistedData();
+                console.log(`[DEBUG] Current persisted data:`, currentData);
+                
+                // Ensure currentData.ownedPets is an array, initialize if not
+                const ownedPets: Array<{ persistentId: string; type: string; modelUri: string }> = 
+                    Array.isArray(currentData?.ownedPets) ? currentData.ownedPets : [];
+                console.log(`[DEBUG] Current owned pets count: ${ownedPets.length}`);
+
+                // 3. Add the new pet to the list
+                ownedPets.push({
+                    persistentId: persistentPetId,
+                    type: petTypeName,
+                    modelUri: petModelUri
+                });
+                console.log(`[DEBUG] Added new pet to list. New count: ${ownedPets.length}`);
+
+                // 4. Save the updated list back to persistence
+                await openingPlayerEntity.player.setPersistedData({ ownedPets: ownedPets });
+                console.log(`[DEBUG] Successfully saved updated pet list to persistence`);
+                
+                // 5. Store the mapping from runtime entity ID to persistent ID
+                entityIdToPersistentIdMap.set(newPet.id, persistentPetId);
+                console.log(`[DEBUG] Mapped entity ID ${newPet.id} to persistent ID ${persistentPetId}`);
+                
+                successFullyPersisted = true;
+                console.log(`[DEBUG] Pet persistence completed successfully`);
+
+                // 6. Send an immediate update to the UI
+                openingPlayerEntity.player.ui.sendData({
+                    type: 'updateOwnedPets',
+                    pets: ownedPets
+                });
+                console.log(`[DEBUG] Sent immediate UI update with ${ownedPets.length} pets`);
+
+            } catch (error) {
+                console.error(`[ERROR] Failed to update persisted pet data for player ${openingPlayerEntity.player.username}:`, error);
+            }
+        } else {
+            console.warn(`[WARN] Could not persist pet: ${!openingPlayerEntity ? 'Missing openingPlayerEntity' : 'Missing pet ID'} for egg ${originalEggId}`);
+        }
+        // --- END ADDED Persistence Logic ---
+
+        // --- ADDED: Check Pet Limit (moved slightly earlier, but conceptually similar) ---
+        let currentPetCount = 0;
+        if (openingPlayerEntity) { 
+          const openingPlayerId = openingPlayerEntity.player.id;
+          for (const state of petFollowStates.values()) {
+            if (state.isFollowing && state.targetPlayerId === openingPlayerId) {
+              currentPetCount++;
+            }
+          }
+          console.log(`Player ${openingPlayerEntity.player.username} has ${currentPetCount} pets following.`); 
+        }
+        const MAX_PETS_PER_PLAYER = 10;
+        // --- END ADDED: Check Pet Limit ---
+
+        // --- ADDED: Set Pet Collision Groups AFTER Spawning ---
+        newPet.setCollisionGroupsForSolidColliders({
+          belongsTo: [ COLLISION_GROUP_PETS ],
+          collidesWith: [
+            CollisionGroup.BLOCK, // Collide with terrain
+            CollisionGroup.ENTITY, // Collide with other default entities
+            COLLISION_GROUP_PETS, // <<< ADDED: Collide with other pets
+            // NOTE: Excludes COLLISION_GROUP_PLAYERS
+            CollisionGroup.ENTITY_SENSOR // Allow interacting with sensors
+          ],
+        });
+        // --- END ADDED ---
+
+        // --- ADDED: Delay before setting initial rotation ---
+        setTimeout(() => {
+          if (openingPlayerEntity && newPet.isSpawned) { // Check if pet still exists
+            const playerPos = openingPlayerEntity.position;
+            const petPos = newPet.position; // Use current position
+            const dirX = playerPos.x - petPos.x;
+            const dirZ = playerPos.z - petPos.z;
+            const angle = Math.atan2(dirX, dirZ) + Math.PI;
+            const halfAngle = angle / 2;
+            const qy = Math.sin(halfAngle);
+            const qw = Math.cos(halfAngle);
+            newPet.setRotation({ x: 0, y: qy, z: 0, w: qw }); // Apply Y-axis rotation
+            console.log(`Set initial rotation for ${petTypeName} (${newPet.id}) to face player ${openingPlayerEntity.player.username} (delayed)`);
+          }
+        }, 1); // Delay by 1 tick (adjust if needed)
+        // --- END ADDED ---
+
+        // Apply nudge impulse
         const nudgeImpulse = { x: (Math.random() - 0.5) * 4 * newPet.mass, y: verticalNudge, z: (Math.random() - 0.5) * 4 * newPet.mass };
         newPet.applyImpulse(nudgeImpulse);
         console.log(`Applied nudge impulse to ${petTypeName}:`, nudgeImpulse);
 
         // Create and Load Animal Nametag Scene UI
         const animalNametagUI = new SceneUI({
-          templateId: 'rabbit-nametag', // TODO: Needs update for different pets
+          templateId: 'rabbit-nametag',
           attachedToEntity: newPet,
-          offset: { x: 0, y: petScale * 1.5, z: 0 }, // Adjust offset based on scale
+          offset: { x: 0, y: petScale * 1.5, z: 0 },
           state: {
             ownerName: openingPlayerEntity?.player.username || 'Unknown',
-            // Set status based on egg type
-            status: eggState.eggType === EggType.BASIC ? 'Basic' : 'Normal', // Changed 'normal' to 'Normal' for non-basic
-            // Add a class for styling based on status
-            statusClass: eggState.eggType === EggType.BASIC ? 'status-basic' : 'status-normal'
+            // --- UPDATED: Set status and class based on egg type ---
+            status: eggState.eggType === EggType.BASIC ? 'Basic' : 
+                    eggState.eggType === EggType.SILVER ? 'Rare' : 
+                    eggState.eggType === EggType.GOLDEN ? 'Cool' : 
+                    eggState.eggType === EggType.DIAMOND ? 'Mythic' : // <<< Diamond -> Mythic (Generic)
+                    'Normal', 
+            statusClass: eggState.eggType === EggType.BASIC ? 'status-basic' : 
+                         eggState.eggType === EggType.SILVER ? 'status-rare' : 
+                         eggState.eggType === EggType.GOLDEN ? 'status-cool' : 
+                         eggState.eggType === EggType.DIAMOND ? 'status-mythic' : // <<< Diamond -> status-mythic (Generic)
+                         'status-normal' 
+            // --- END UPDATED ---
           },
         });
         animalNametagUI.load(world);
 
-        // Attach TICK listener FOR THIS SPECIFIC PET
+        // --- MODIFIED: Make pet follow ONLY if limit not reached AND PERSISTENCE SUCCEEDED ---
+        if (openingPlayerEntity && successFullyPersisted) { // <<< Check persistence flag
+          if (currentPetCount < MAX_PETS_PER_PLAYER) { 
+            console.log(`Making ${petTypeName} (${newPet.id}) follow ${openingPlayerEntity.player.username}`);
+            makePetFollow(newPet, openingPlayerEntity, petTypeName, petWalkAnimation, petIdleAnimation || ''); 
+
+            // --- REMOVED old persistence logic here ---
+            // const dataToSave = { playerPet: { ... } };
+            // openingPlayerEntity.player.setPersistedData(dataToSave) // <<< REMOVED
+          } else {
+            // Send message to player if limit reached
+            world.chatManager.sendPlayerMessage(
+              openingPlayerEntity.player,
+              `You already have the maximum of ${MAX_PETS_PER_PLAYER} pets following you! This new one will wander.`, 
+              'FFFF00' // Yellow warning color
+            );
+            console.log(`Pet limit reached for ${openingPlayerEntity.player.username}. New pet ${newPet.id} will not follow.`);
+          }
+        } else if (openingPlayerEntity && !successFullyPersisted) {
+            console.warn(`[WARN] Pet ${petTypeName} (${newPet.id}) hatched but persistence failed. It will not follow player ${openingPlayerEntity.player.username}.`);
+            // Optional: Send a message to the player about the failure?
+            // world.chatManager.sendPlayerMessage(openingPlayerEntity.player, `Error saving your new ${petTypeName}! It won't follow.`, 'FF0000');
+        } else {
+          console.warn(`Could not make pet follow: openingPlayerEntity not found for ID ${eggState.openingPlayerId}`);
+        }
+        // --- END MODIFIED --- 
+
+        // --- ADDED BACK: Attach TICK listener FOR THIS SPECIFIC PET ---
         newPet.on(EntityEvent.TICK, () => {
           const followState = petFollowStates.get(newPet);
           if (followState?.isFollowing && followState.targetEntity && followState.targetPlayerId && playerEntities.has(followState.targetPlayerId)) {
-            // Use generic animation names stored for the pet type
-            updatePetMovement(newPet, followState.targetEntity, petWalkAnimation, petIdleAnimation);
+            // Pass the specific animation names for the hatched pet
+            updatePetMovement(newPet, followState.targetEntity, petWalkAnimation, petIdleAnimation || '');
           } else if (followState?.isFollowing) {
-            // Target became invalid, stop following
+            // Stop following invalid target logic...
             console.log(`${petTypeName} (${newPet.id}) stopped following invalid target: ${followState.targetPlayerId}`);
             followState.isFollowing = false;
             followState.targetPlayerId = null;
             followState.targetEntity = null;
-            // Manually stop animations as fallback
-            newPet.stopModelAnimations([petWalkAnimation]);
-            newPet.startModelLoopedAnimations([petIdleAnimation]);
+            if (petWalkAnimation) { 
+                newPet.stopModelAnimations([petWalkAnimation]);
+            }
+            if (petIdleAnimation) { 
+                newPet.startModelLoopedAnimations([petIdleAnimation]);
+            }
             newPet.setLinearVelocity({ x: 0, y: 0, z: 0 });
             newPet.setAngularVelocity({ x: 0, y: 0, z: 0 });
           } else {
-            // If not following, ensure velocity is zero and idle animation is playing
+            // Idle logic (not following)
             newPet.setLinearVelocity({ x: 0, y: 0, z: 0 });
-            newPet.setAngularVelocity({ x: 0, y: 0, z: 0 });
-             // Ensure idle animation plays if not explicitly stopped/started elsewhere
-            if (!newPet.modelLoopedAnimations.has(petIdleAnimation)) {
-                newPet.stopModelAnimations([petWalkAnimation]); // Stop the specific walk animation
-                newPet.startModelLoopedAnimations([petIdleAnimation]);
-            }
+             if (newPet.modelUri !== DIAMOND_PET_MODEL_URI) { // Keep Doge spinning
+                newPet.setAngularVelocity({ x: 0, y: 0, z: 0 });
+                 if (petIdleAnimation && !newPet.modelLoopedAnimations.has(petIdleAnimation)) {
+                     if(petWalkAnimation) newPet.stopModelAnimations([petWalkAnimation]); 
+                     newPet.startModelLoopedAnimations([petIdleAnimation]);
+                 }
+             }
           }
         });
+        // --- END ADDED BACK ---
 
-        // --- Make the pet follow the player who opened the egg ---
-        if (openingPlayerEntity) {
-          console.log(`Making ${petTypeName} (${newPet.id}) follow ${openingPlayerEntity.player.username}`);
-          makePetFollow(newPet, openingPlayerEntity, petTypeName, petWalkAnimation, petIdleAnimation);
+        // --- ADDED: Schedule Respawn --- 
+        const originalModelUri = eggState.modelUri;
+        const originalPosition = eggState.basePosition; // Use the stored base position
+        const originalEggType = eggState.eggType;
+        console.log(`[DEBUG] Scheduling respawn for ${originalEggType} egg (Original ID: ${originalEggId}) in ${EGG_RESPAWN_DELAY_MS}ms.`); // Log BEFORE scheduling (use captured ID)
+        setTimeout(() => {
+          console.log(`[DEBUG] Respawn timer fired for ${originalEggType} egg (Original ID: ${originalEggId}).`); // Log INSIDE timer callback (use captured ID)
+          // Removed the redundant log from createAndSpawnEgg itself
+          createAndSpawnEgg(originalModelUri, originalPosition, originalEggType);
+        }, EGG_RESPAWN_DELAY_MS);
+        // --- END ADDED: Schedule Respawn --- 
 
-          // Save pet state to player persistence
-          openingPlayerEntity.player.setPersistedData('playerPet', {
-            hasPet: true,
-            petType: eggState.eggType, // Store the EggType enum value
-          }).catch(error => {
-            console.error(`Error saving pet data for player ${openingPlayerEntity.player.username}:`, error);
-          });
-        } else {
-          console.warn(`Could not make pet follow: openingPlayerEntity not found for ID ${eggState.openingPlayerId}`);
+        // --- Add pet to session storage for the opening player ---
+        if (openingPlayerId) {
+          const persistentId = generateId();
+          console.log(`[DEBUG] Starting pet session storage for player with ID ${openingPlayerId}`);
+          
+          // Get or create player's session pets array
+          if (!playerSessionPets.has(openingPlayerId)) {
+            playerSessionPets.set(openingPlayerId, []);
+          }
+          
+          // Add the pet to session storage
+          const playerPets = playerSessionPets.get(openingPlayerId);
+          if (playerPets && newPet.id !== undefined) {
+            playerPets.push({ 
+              type: petTypeName, 
+              persistentId,
+              rarity: eggState.eggType // <<< ADDED: Store rarity from the egg state
+            });
+            console.log(`[DEBUG] Added new pet (${petTypeName}, rarity: ${eggState.eggType}) to session list. New count: ${playerPets.length}`); // Updated log
+            
+            // Map entity ID to persistent ID for later reference
+            entityIdToPersistentIdMap.set(newPet.id, persistentId);
+            
+            // --- ADDED: Check if this pet grants multiplier and update --- 
+            // <<< ADDED Null Check for openingPlayerId >>>
+            if (openingPlayerId) { 
+              const isRabbitPet = petTypeName.toLowerCase() === 'rabbit';
+              const isBasicEgg = eggState.eggType === EggType.BASIC;
+              const currentMultiplier = playerMultipliers.get(openingPlayerId) ?? 1.0;
+              
+              if (isRabbitPet && isBasicEgg && currentMultiplier < 1.5) {
+                console.log(`[Multiplier] Player ${openingPlayerId} hatched Basic Rabbit. Applying 1.5x multiplier.`);
+                playerMultipliers.set(openingPlayerId, 1.5);
+                startOrUpdateTowerBuilding(openingPlayerId); // Restart tower building with new speed
+              }
+            }
+            // --- END ADDED --- 
+            
+            // Send immediate UI update to the player who opened the egg
+            if (openingPlayerEntity?.player) {
+              openingPlayerEntity.player.ui.sendData({
+                type: 'updateOwnedPets',
+                pets: playerPets
+              });
+              console.log(`[DEBUG] Sent immediate UI update with ${playerPets.length} pets`);
+            }
+
+            // --- MODIFIED: Always recalculate multiplier after adding pet ---
+            console.log(`[Multiplier] Triggering multiplier recalculation for ${openingPlayerId} after hatching ${petTypeName}`);
+            calculateAndUpdateMultiplier(openingPlayerId);
+            // --- END MODIFIED ---
+          }
         }
 
-        // --- Respawn THIS egg after a delay ---
-        console.log(`Scheduling egg respawn for model ${eggState.modelUri} in ${EGG_RESPAWN_DELAY_MS / 1000} seconds.`);
-        setTimeout(() => createAndSpawnEgg(eggState.modelUri, eggState.basePosition, eggState.eggType), EGG_RESPAWN_DELAY_MS);
-
-        return; // Stop processing this tick for the despawned egg
+        return; // Exit tick handler for this egg after hatching
       }
-      // --- Continue Opening Animation/Shake ---
-      currentRotateSpeed *= 4; // Spin faster
-      const shakeX = (Math.random() - 0.5) * EGG_SHAKE_AMPLITUDE * 2;
-      const shakeZ = (Math.random() - 0.5) * EGG_SHAKE_AMPLITUDE * 2;
-      currentPositionVec.x += shakeX;
-      currentPositionVec.z += shakeZ;
-      currentPositionVec.y = eggState.basePosition.y + (Math.random() - 0.5) * EGG_SHAKE_AMPLITUDE;
-
-      // Set angular velocity for faster spinning during opening
-      entity.setAngularVelocity({ x: 0, y: EGG_ROTATE_SPEED * 4, z: 0 });
-
-    } else {
-      // If not opening, reset angular velocity to normal spin
-      entity.setAngularVelocity({ x: 0, y: EGG_ROTATE_SPEED, z: 0 });
+      // --- End Hatching Check ---
     }
     // --- End Opening Sequence Handling ---
 
-    // Set position using the calculated/modified Vector3 instance
-    entity.setPosition(currentPositionVec);
+    // --- Floating Animation REVERTED to previous working logic ---
+    if (!eggState.isOpening) {
+      // Apply Normal Floating/Spinning when NOT opening
+      entity.setAngularVelocity({ x: 0, y: currentRotateSpeed, z: 0 });
+      const currentPositionVec = new Vector3(
+        eggState.basePosition.x,
+        eggState.basePosition.y + Math.sin(eggState.animationTime * EGG_FLOAT_SPEED) * EGG_FLOAT_AMPLITUDE,
+        eggState.basePosition.z
+      );
+      entity.setPosition(currentPositionVec);
+    } else {
+        // Apply Opening Animation Effects (including shake)
+        entity.setAngularVelocity({ x: 0, y: currentRotateSpeed, z: 0 }); // Spin faster
+        const currentPositionVec = new Vector3(
+            eggState.basePosition.x + currentShakeAmplitude, // Apply shake horizontally
+            eggState.basePosition.y
+                + Math.sin(eggState.animationTime * EGG_FLOAT_SPEED) * EGG_FLOAT_AMPLITUDE // Base float
+                + currentShakeAmplitude, // Apply shake vertically (or adjust axis if needed)
+            eggState.basePosition.z // Keep Z the same (or apply shake if desired)
+        );
+        entity.setPosition(currentPositionVec);
+    }
+    // --- End Reverted Floating Animation ---
 
-    // --- REMOVED MANUAL ROTATION LOGIC ---
-    // The KINEMATIC_VELOCITY rigid body type now handles rotation based on angularVelocity.
-    // const angle = eggState.animationTime * currentRotateSpeed;
-    // const halfAngle = angle * 0.5;
-    // const qy = Math.sin(halfAngle);
-    // const qw = Math.cos(halfAngle);
-    
-    // console.log(`Egg ${entity.id}: animTime=${eggState.animationTime.toFixed(2)}, speed=${currentRotateSpeed}, angle=${angle.toFixed(2)}, qy=${qy.toFixed(2)}, qw=${qw.toFixed(2)}`);
-    
-    // entity.setRotation({ x: 0, y: qy, z: 0, w: qw });
-    // --- END REMOVED MANUAL ROTATION LOGIC ---
-  };
-  // --- End Refactored Egg TICK Handler ---
+    // --- REMOVED problematic isValid check ---
+
+  }; // End of handleEggTick
 
   // --- Define makePetFollow *after* handleEggTick ---
   /**
@@ -819,8 +1271,11 @@ startServer((world: World) => {
         followState.targetEntity = null;
         
         // Reset to idle animation when stopped following
-        pet.stopModelAnimations([petWalkAnimation]);
-        pet.startModelLoopedAnimations([petIdleAnimation]);
+        // <<< ADDED check to skip animation for Doge Dog >>>
+        if (pet.modelUri !== DIAMOND_PET_MODEL_URI) {
+            if (petWalkAnimation) pet.stopModelAnimations([petWalkAnimation]);
+            if (petIdleAnimation) pet.startModelLoopedAnimations([petIdleAnimation]);
+        }
         
         world.chatManager.sendPlayerMessage(
           playerEntity.player, 
@@ -835,12 +1290,15 @@ startServer((world: World) => {
         followState.targetEntity = playerEntity;
         
         // Immediately start movement animation when following begins
-        pet.stopModelAnimations([petIdleAnimation]);
-        pet.startModelLoopedAnimations([petWalkAnimation]);
+        // <<< ADDED check to skip animation for Doge Dog >>>
+        if (pet.modelUri !== DIAMOND_PET_MODEL_URI) {
+            if (petIdleAnimation) pet.stopModelAnimations([petIdleAnimation]);
+            if (petWalkAnimation) pet.startModelLoopedAnimations([petWalkAnimation]);
+        }
         
         world.chatManager.sendPlayerMessage(
           playerEntity.player, 
-          `${petTypeName} started following you!`, // Use the petTypeName argument directly
+          `${petTypeName} started following you!`, 
           'FFAA00'
         );
       }
@@ -854,12 +1312,13 @@ startServer((world: World) => {
   // --- Updated Egg Creation Function ---
   // Accepts model URI, initial position, AND egg type
   const createAndSpawnEgg = (modelUri: string, initialPosition: Vector3, eggType: EggType) => {
-    // Basic check to prevent excessive eggs if respawn logic goes wild
-    // A more robust check might look at proximity or count eggs of a specific type.
-    if (activeEggs.size >= 10) {
-        console.warn("Maximum number of eggs reached. Not spawning new egg.");
-        return;
-    }
+    // --- REMOVED Max Egg Check ---
+    // if (activeEggs.size >= 10) { 
+    //     console.warn("[WARN] Maximum number of eggs (10) reached. Not spawning new egg.");
+    //     return;
+    // }
+    // --- END REMOVED ---
+    console.log(`[DEBUG] createAndSpawnEgg called. Current activeEggs size: ${activeEggs.size}`); // Log map size (kept for info)
 
     console.log(`Creating and spawning new ${eggType} egg: ${modelUri} at:`, initialPosition);
 
@@ -883,7 +1342,6 @@ startServer((world: World) => {
       openStartTime: null,
       openingPlayerId: null,
       animationTime: 0, // Reset animation timer
-      playersInRange: new Set<string>(), // ADDED: Initialize empty set
       eggType: eggType, // <<< Store the provided eggType
     };
 
@@ -932,7 +1390,7 @@ startServer((world: World) => {
 
       // Call the single egg creation function with model AND type
       // chosenEggType is guaranteed to be defined here due to the check above
-      createAndSpawnEgg(chosenEggModel, new Vector3(x, y, z), chosenEggType);
+      createAndSpawnEgg(chosenEggModel, new Vector3(x, y, z), chosenEggType!);
     }
     console.log(`Finished request to spawn ${count} eggs.`);
   };
@@ -978,12 +1436,24 @@ startServer((world: World) => {
     const playerEntity = new PlayerEntity({
       player: player,
       name: player.username, // Use player's username for the name
-      modelUri: 'models/players/player.gltf', 
-      modelLoopedAnimations: ['idle'],      
-      modelScale: 0.5,                        
+      modelUri: 'models/players/player.gltf',
+      modelLoopedAnimations: ['idle'],
+      modelScale: 0.5,
     });
     playerEntity.spawn(world, new Vector3(-5, 5, 16));
     playerEntities.set(player.id, playerEntity);
+
+    // --- ADDED: Set Collision Groups AFTER Spawning ---
+    playerEntity.setCollisionGroupsForSolidColliders({
+      belongsTo: [ COLLISION_GROUP_PLAYERS ],
+      collidesWith: [
+        CollisionGroup.BLOCK, // Collide with terrain
+        CollisionGroup.ENTITY, // Collide with other default entities (if needed)
+        // NOTE: Excludes COLLISION_GROUP_PETS
+        CollisionGroup.ENTITY_SENSOR // Allow interacting with sensors
+      ],
+    });
+    // --- END ADDED ---
 
     console.log(`Player ${player.username} (${player.id}) joined.`);
 
@@ -992,6 +1462,24 @@ startServer((world: World) => {
         playerScores.set(player.id, 0);
         updateLeaderboard();
     }
+
+    // --- ADDED: Initialize Multiplier & Check Pets ---
+    let initialMultiplier = 1.0;
+    const sessionPets = playerSessionPets.get(player.id) || [];
+    const hasRabbitPet = sessionPets.some(pet => 
+        pet.type.toLowerCase() === 'rabbit' && 
+        pet.rarity === EggType.BASIC
+    );
+
+    if (hasRabbitPet) {
+        console.log(`[Multiplier] Player ${player.username} joined with Basic Rabbit. Setting multiplier to 1.5x`);
+        initialMultiplier = 1.5;
+    } else {
+        console.log(`[Multiplier] Player ${player.username} joined without Basic Rabbit. Setting multiplier to 1.0x`);
+    }
+    playerMultipliers.set(player.id, initialMultiplier);
+    updateLeaderboard(); // Update leaderboard now that score and multiplier are set
+    // --- END ADDED ---
 
     // --- Load Player Main UI ---
     player.ui.load('ui/index.html'); 
@@ -1010,6 +1498,7 @@ startServer((world: World) => {
           location: assignedLocation,
           currentY: assignedLocation.center.y,
           layerIndex: 0,
+          isHovering: false, // <<< ADDED: Initialize hover state
         });
         nextTowerIndex++;
 
@@ -1045,11 +1534,10 @@ startServer((world: World) => {
         }, 1000);
         playerBlockIntervals.set(player.id, blockGenerationInterval);
 
-        // Start Automatic Tower Building Interval for this player
-        const towerBuildInterval = setInterval(() => {
-          tryBuildTowerBlock(player.id);
-        }, 200);
-        playerBlockIntervals.set(`tower_${player.id}`, towerBuildInterval);
+        // --- MODIFIED: Start tower building using the new function --- 
+        startOrUpdateTowerBuilding(player.id);
+        // --- END MODIFIED --- 
+
       } else {
         console.error(`Error: assignedLocation was unexpectedly undefined for player ${player.username} at index ${nextTowerIndex}`);
       }
@@ -1068,23 +1556,39 @@ startServer((world: World) => {
 
       // Handle Tower Teleport Request
       if (data && data.type === 'requestTowerTeleport') {
+          console.log("--- [DEBUG] Server received requestTowerTeleport ---"); // <<< ADDED LOG
           console.log(`Received teleport request from ${playerUI.player.username}`);
           const towerData = playerTowerData.get(currentPlayerId); // Get player's tower data
 
-          if (towerData) { // Check if player has tower data (they might not if all slots were full)
-            const teleportY = towerData.currentY + 2;
+          if (towerData) { // Check if player has tower data
+            // --- MODIFIED: Teleport and Hover Logic ---
+            // Calculate the Y level of the topmost block
+            // If layerIndex is 0, the last layer was just completed, so the top is currentY - 1
+            // Otherwise, the top is currentY
+            const topBlockY = towerData.layerIndex === 0 && towerData.currentY > towerData.location.center.y
+                                ? towerData.currentY - 1
+                                : towerData.currentY;
+
+            // Calculate the teleport destination slightly above the center of the tower top
+            const teleportY = topBlockY + 1.5; // Adjust Y offset as needed for hover height
             const teleportDestination = new Vector3(towerData.location.center.x, teleportY, towerData.location.center.z);
 
-            console.log(`Teleporting ${playerUI.player.username} to ${teleportDestination.x}, ${teleportDestination.y}, ${teleportDestination.z}`);
-            if (currentPlayerEntity.rawRigidBody) {
-              currentPlayerEntity.rawRigidBody.teleport(teleportDestination, true);
-            } else {
-              console.error(`Could not teleport ${playerUI.player.username}: rawRigidBody not found.`);
-            }
+            console.log("--- [DEBUG] Attempting to teleport player... ---"); // <<< ADDED LOG
+            console.log(`Teleporting and hovering ${playerUI.player.username} to ${teleportDestination.x.toFixed(2)}, ${teleportDestination.y.toFixed(2)}, ${teleportDestination.z.toFixed(2)}`);
+            
+            // Use playerEntity.teleport() for smoother transition
+            // <<< FIX: Use setPosition instead of teleport >>>
+            currentPlayerEntity.setPosition(teleportDestination);
+            // Set the hovering state for this player
+            towerData.isHovering = true; 
+            currentPlayerEntity.rawRigidBody?.setGravity(0); // <<< MODIFIED: Try on rawRigidBody
+            console.log("--- [DEBUG] SetPosition call finished. Hover state set to true. Gravity Scale set to 0. ---"); // <<< UPDATED LOG
+            playerTowerData.set(currentPlayerId, towerData); // Save the updated state
+            // --- END MODIFIED ---
           } else {
             console.warn(`Player ${playerUI.player.username} requested teleport but has no assigned tower.`);
             // Maybe send a chat message back?
-            // playerUI.player.chat("You don't have a tower to teleport to!");
+             player.ui.sendData({ type: 'teleportFailed', reason: 'No tower assigned' });
           }
       }
       // Handle Pet Interaction Requests
@@ -1094,8 +1598,12 @@ startServer((world: World) => {
           let closestPet: Entity | null = null;
           let minDistance = Infinity;
 
+          // <<< Updated check to include Payload Bomb >>>
+          const allowedPetModels = [BASIC_PET_MODEL_URI, SILVER_PET_MODEL_URI, GOLDEN_PET_MODEL_URI, DIAMOND_PET_MODEL_URI]; 
+
           for (const pet of petFollowStates.keys()) {
-            if (pet.modelUri === RABBIT_MODEL_URI || pet.modelUri === PIG_MODEL_URI || pet.modelUri === CHICKEN_MODEL_URI) { // Ensure it's a rabbit, pig, or chicken pet
+            // Ensure pet.modelUri is defined before checking
+            if (pet.modelUri && allowedPetModels.includes(pet.modelUri)) { 
               const distance = calculateDistance(currentPlayerEntity.position, pet.position);
               if (distance < minDistance && distance <= 3) { // Check if within interactable range (e.g., 3 units)
                 minDistance = distance;
@@ -1137,53 +1645,191 @@ startServer((world: World) => {
     });
     // --- End Listen for UI Data --
 
-    // --- ADDED: Listen for Player Input Tick (F Key Interaction) ---
+    // --- MODIFIED: Player Input Tick Handler ---
     // PlayerEntity by default has a PlayerEntityController assigned to .controller,
     // but we explicitly assert that with ! to prevent typescript from complaining.
     playerEntity.controller!.on(BaseEntityControllerEvent.TICK_WITH_PLAYER_INPUT, ({ entity, input, cameraOrientation, deltaTimeMs }) => {
-      // Check if F key (or other interaction key) is pressed AND if the pressed state wasn't already handled this press
-      if (input.f && !playerEPressedState.get(player.id)) { // Assuming 'f' is the interaction key in PlayerInput
+      
+      // --- ADDED: Deactivate Hover on Movement ---
+      const towerData = playerTowerData.get(player.id);
+      if (towerData?.isHovering) {
+          // Check for any movement input
+          if (input.w || input.a || input.s || input.d || input.sp) {
+              console.log(`Player ${player.username} moved while hovering. Disabling hover.`);
+              towerData.isHovering = false;
+              entity.rawRigidBody?.setGravity(1); // <<< ADDED: Re-enable gravity
+              playerTowerData.set(player.id, towerData); // Save the updated state
+          }
+      }
+      // --- END ADDED ---
+
+      // --- Centralized Egg Prompt Logic (Remove Debug Logs) ---
+      let closestEggState: EggState | null = null;
+      let minDistanceSq = EGG_PROMPT_DISTANCE * EGG_PROMPT_DISTANCE; 
+
+      for (const eggState of activeEggs.values()) {
+        if (!eggState.isOpening) {
+          const dx = entity.position.x - eggState.entity.position.x;
+          const dy = entity.position.y - eggState.entity.position.y;
+          const dz = entity.position.z - eggState.entity.position.z;
+          const distanceSq = dx * dx + dy * dy + dz * dz;
+          if (distanceSq <= minDistanceSq) {
+            minDistanceSq = distanceSq;
+            closestEggState = eggState;
+          }
+        }
+      }
+      
+      const newVisiblePromptType: EggType | null = closestEggState ? closestEggState.eggType : null;
+      const currentVisiblePromptType = playerVisiblePrompt.get(player.id);
+
+      if (newVisiblePromptType !== currentVisiblePromptType) {
+        // Hide the old prompt if one was visible
+        if (currentVisiblePromptType) {
+          const hideMessageType = `update${capitalizeFirstLetter(currentVisiblePromptType)}EggPrompt`;
+          player.ui.sendData({ type: hideMessageType, visible: false });
+        }
+        // Show the new prompt if one is now visible
+        if (newVisiblePromptType) {
+          const showMessageType = `update${capitalizeFirstLetter(newVisiblePromptType)}EggPrompt`;
+          // --- MODIFIED: Send cost along with visibility --- 
+          let cost = 0;
+          switch (newVisiblePromptType) {
+            case EggType.BASIC:
+              cost = COST_EGG_BASIC;
+              break;
+            case EggType.SILVER:
+              cost = COST_EGG_SILVER;
+              break;
+            case EggType.GOLDEN:
+              cost = COST_EGG_GOLDEN;
+              break;
+            case EggType.DIAMOND:
+              cost = COST_EGG_DIAMOND;
+              break;
+          }
+          player.ui.sendData({ type: showMessageType, visible: true, cost: cost }); // Send cost
+          // --- END MODIFIED ---
+        }
+        playerVisiblePrompt.set(player.id, newVisiblePromptType);
+      }
+      // --- End Centralized Egg Prompt Logic --- 
+
+      // --- Existing F Key Interaction Logic (Uses the already found closestEggState) ---
+      if (input.f && !playerEPressedState.get(player.id)) {
         playerEPressedState.set(player.id, true); // Mark as handled for this press down
 
         console.log(`Player ${player.username} pressed F`); // Debug log
 
-        // Find the nearest non-opening egg within interaction range
-        let closestEgg: EggState | null = null;
-        let minDistance = EGG_INTERACT_DISTANCE; // Use the defined interaction distance
-
-        for (const eggState of activeEggs.values()) {
-          // Check if the egg is NOT already opening
-          if (!eggState.isOpening) {
-            const distance = calculateDistance(entity.position, eggState.entity.position);
-            if (distance <= minDistance) {
-              minDistance = distance;
-              closestEgg = eggState;
+        // Use the closestEggState determined by the proximity check above
+        // No need to recalculate distance here, just check if an egg was found and its type
+        if (closestEggState) { 
+          // Check if the closest egg (already determined to be within range) can be opened
+          if (closestEggState.eggType === EggType.BASIC) {
+            // Check if player has enough points for basic egg
+            const cost = COST_EGG_BASIC; // Use constant
+            const eggTypeName = "Basic";
+            const currentScore = playerScores.get(player.id) || 0;
+            if (currentScore < cost) {
+              // Not enough points - send message to player
+              world.chatManager.sendPlayerMessage(
+                player,
+                `You need ${cost} points to open a ${eggTypeName} egg! Current points: ${currentScore}`,
+                'FF0000' // Red color for error
+              );
+              return;
             }
-          }
-        }
 
-        // If a valid egg is found, check its type before opening
-        if (closestEgg) {
-          // --- ADDED Check: Only allow opening BASIC or SILVER eggs with 'F' --- 
-          if (closestEgg.eggType === EggType.BASIC || closestEgg.eggType === EggType.SILVER) {
-            console.log(`Player ${player.username} starting to open ${closestEgg.eggType} egg ${closestEgg.entity.id}`); // Debug log
-            closestEgg.isOpening = true;
-            closestEgg.openStartTime = Date.now();
-            closestEgg.openingPlayerId = player.id; // Store who opened it
+            // Deduct points and update score
+            const newScore = currentScore - cost;
+            playerScores.set(player.id, newScore);
+            updateLeaderboard(); // Update the leaderboard to reflect new score
+
+            // --- LOGGING: Calling decreaseTowerHeight --- 
+            console.log(`[PointDeduct][CALLING DECREASE] Player: ${player.username} (${player.id}), Blocks to Remove: ${cost}`);
+
+            // --- ADDED: Decrease tower height ---
+            decreaseTowerHeight(player.id, cost); // Remove blocks for the egg cost
+
+            console.log(`Player ${player.username} starting to open ${closestEggState.eggType} egg ${closestEggState.entity.id}`);
+            closestEggState.isOpening = true;
+            closestEggState.openStartTime = Date.now();
+            closestEggState.openingPlayerId = player.id;
 
             // Play an opening sound effect at the egg's location
             const openSound = new Audio({
-              uri: 'audio/sfx/egg_open_start.mp3', // Replace with your actual sound effect
-              position: closestEgg.entity.position,
+              uri: 'audio/sfx/egg_open_start.mp3',
+              position: closestEggState.entity.position,
               volume: 0.7,
             });
             openSound.play(world);
 
-            // Optionally, update the SceneUI or OverlayUI to show opening progress
-            // player.ui.sendData({ type: 'eggOpeningStarted', eggId: closestEgg.entity.id });
+            // Send message confirming point deduction
+            world.chatManager.sendPlayerMessage(
+              player,
+              `Spent ${cost} points to open ${eggTypeName} egg. Remaining points: ${newScore}`,
+              'FFAA00' // Orange/gold color for info
+            );
+          } else if (closestEggState.eggType === EggType.SILVER || closestEggState.eggType === EggType.GOLDEN || closestEggState.eggType === EggType.DIAMOND) {
+            let cost = 0;
+            let eggTypeName = "";
+            switch (closestEggState.eggType) {
+              case EggType.SILVER:
+                cost = COST_EGG_SILVER; // Use constant
+                eggTypeName = "Silver";
+                break;
+              case EggType.GOLDEN:
+                cost = COST_EGG_GOLDEN; // Use constant
+                eggTypeName = "Golden";
+                break;
+              case EggType.DIAMOND:
+                cost = COST_EGG_DIAMOND; // Use constant
+                eggTypeName = "Diamond";
+                break;
+            }
+
+            // Check if player has enough points
+            const currentScore = playerScores.get(player.id) || 0;
+            if (currentScore < cost) {
+              // Not enough points - send message
+              world.chatManager.sendPlayerMessage(
+                player,
+                `You need ${cost} points to open a ${eggTypeName} egg! Current points: ${currentScore}`,
+                'FF0000' // Red color for error
+              );
+              return; // Stop interaction
+            }
+
+            // Deduct points and update score
+            const newScore = currentScore - cost;
+            playerScores.set(player.id, newScore);
+            updateLeaderboard(); // Update the leaderboard
+
+            // Decrease tower height
+            decreaseTowerHeight(player.id, cost); // Remove blocks equivalent to cost
+            
+            // Send confirmation message
+            world.chatManager.sendPlayerMessage(
+              player,
+              `Spent ${cost} points to open ${eggTypeName} egg. Remaining points: ${newScore}`,
+              'FFAA00' // Orange/gold color for info
+            );
+
+            console.log(`Player ${player.username} starting to open ${closestEggState.eggType} egg ${closestEggState.entity.id}`); 
+            closestEggState.isOpening = true;
+            closestEggState.openStartTime = Date.now();
+            closestEggState.openingPlayerId = player.id;
+
+            // Play an opening sound effect at the egg's location
+            const openSound = new Audio({
+              uri: 'audio/sfx/egg_open_start.mp3',
+              position: closestEggState.entity.position,
+              volume: 0.7,
+            });
+            openSound.play(world);
           } else {
             // Log if the player tried to open an egg of an unsupported type with 'F'
-            console.log(`Player ${player.username} tried to open egg ${closestEgg.entity.id} of type ${closestEgg.eggType}, which is not supported by F key.`);
+            console.log(`Player ${player.username} tried to open egg ${closestEggState.entity.id} of type ${closestEggState.eggType}, which is not supported by F key.`);
           }
         } else {
           console.log(`Player ${player.username} pressed F, but no interactable egg was nearby.`); // Debug log
@@ -1193,44 +1839,202 @@ startServer((world: World) => {
         // Reset the pressed state when the key is released
         playerEPressedState.set(player.id, false);
       }
-    });
-    // --- END ADDED: Listen for Player Input Tick ---
+      // --- End F Key Interaction Logic ---
+      
+      // --- Tower Placement Logic (Raycasting) ---
+      if (input.ml || input.mr) {
+        // ... (Existing raycast block break/place logic - unchanged) ...
+         const origin = entity.position; 
+         const direction = entity.player.camera.facingDirection; 
+         const length = 5;
+         const raycastResult = world.simulation.raycast(origin, direction, length, {
+           filterExcludeRigidBody: playerEntity.rawRigidBody, 
+         });
 
-    // --- Player Initial State (Spawn Pet etc.) ---
-    // Load player-specific data using the Player object
-    PersistenceManager.instance.getPlayerData(player) // Corrected: Pass the player object
-        .then((playerData: Record<string, unknown> | void) => { // Expect generic object or void
-            // Check if playerData exists and is an object
-            if (playerData && typeof playerData === 'object') {
-                // Check if the 'petInfo' key exists within the player data
-                if ('petInfo' in playerData && playerData.petInfo) {
-                    // Assume petInfo has the structure PlayerPetData
-                    const petData = playerData.petInfo as PlayerPetData; // Type assertion
+         if (raycastResult?.hitBlock) { 
+           if (input.ml) { 
+             const breakPosition = raycastResult.hitBlock.globalCoordinate;
+             world.chunkLattice.setBlock(breakPosition, 0); 
+           } else { 
+             const placePosition = raycastResult.hitBlock.getNeighborGlobalCoordinateFromHitPoint(raycastResult.hitPoint);
+             
+             // --- Tower Building Integration ---
+             const towerState = playerTowerData.get(player.id);
+             if (towerState && (playerBlockResources.get(player.id) ?? 0 > 0)) { // Check if player has resources
+                 const towerBaseX = towerState.location.center.x - towerState.location.width / 2;
+                 const towerBaseZ = towerState.location.center.z - towerState.location.depth / 2;
 
-                    if (petData.hasPet && petData.petType === 'rabbit') {
-                        console.log(`Player ${player.username} has saved rabbit pet data. Spawning pet.`);
-                        spawnPetForPlayer(player.id, playerEntity, 'rabbit'); // Call the placeholder
-                    } else {
-                        console.log(`Player ${player.username} has petInfo, but no rabbit pet indicated.`);
-                    }
-                } else {
-                     console.log(`Player ${player.username} has saved data, but no 'petInfo' field found.`);
-                }
-            } else {
-                console.log(`Player ${player.username} has no saved player data found.`);
-            }
-        }).catch((error: any) => { // Added type annotation for error
-            console.error(`Error loading player data for player ${player.id}:`, error);
+                 // Check if the placement position is within the player's designated tower area
+                 if (towerState &&
+                     placePosition.x >= towerBaseX && 
+                     placePosition.x < towerBaseX + towerState.location.width &&
+                     placePosition.z >= towerBaseZ && 
+                     placePosition.z < towerBaseZ + towerState.location.depth &&
+                     placePosition.y >= towerState.location.center.y) { // Allow building upwards from base
+
+                     // Place the block (use wood for now)
+                     world.chunkLattice.setBlock(placePosition, WOOD_BLOCK_ID);
+                     
+                     // Deduct resource
+                     const currentBlocks = playerBlockResources.get(player.id) ?? 0;
+                     playerBlockResources.set(player.id, currentBlocks - 1);
+
+                     // Check if this completes a layer and update tower state
+                     // This requires tracking blocks placed per layer - simplified for now
+                     // updateTowerProgress(player.id, placePosition.y); 
+
+                 } else {
+                    // Optional: Send message that they can't build here
+                    // world.chatManager.sendPlayerMessage(player, "You can only build within your tower area!", 'FF0000');
+                 }
+             } else {
+                // Optional: Send message if out of resources
+                // world.chatManager.sendPlayerMessage(player, "You need more blocks!", 'FFCC00');
+             }
+             // --- End Tower Building Integration ---
+           }
+         }
+
+         input.ml = false;
+         input.mr = false;
+      }
+      // --- End Tower Placement Logic ---
+
+    }); // End TICK_WITH_PLAYER_INPUT listener
+    // --- End Player Input Tick Handler ---
+    
+    // Initialize the visible prompt state for this player
+    playerVisiblePrompt.set(player.id, null);
+
+    // Set up pet locker UI data handler
+    player.ui.on(PlayerUIEvent.DATA, ({ data }) => {
+      console.log(`[DEBUG] Received UI data from player ${player.username}:`, data);
+      
+      if (data.type === 'requestOwnedPets') {
+        // Get session pets for this player
+        const playerPets = playerSessionPets.get(player.id) || [];
+        console.log(`[DEBUG] Sending ${playerPets.length} session pets to player ${player.username}`);
+        
+        // Send the session pets to the UI
+        player.ui.sendData({
+          type: 'updateOwnedPets',
+          pets: playerPets
         });
+      }
+      else if (data.type === 'deletePet') {
+        // Handle pet deletion
+        const persistentIdToDelete = data.persistentId;
+        const playerId = player.id; // Get the player ID
+        console.log(`[DEBUG] Handling pet deletion request for Player: ${playerId}, Pet PersistentID: ${persistentIdToDelete}`);
+        
+        // --- ADDED: Find and Despawn Entity --- 
+        let entityToDespawn: Entity | undefined = undefined;
+        let entityIdToDelete: number | undefined = undefined;
 
-  }); // End JOINED_WORLD listener
+        // Iterate through the map to find the runtime entity ID
+        for (const [entityId, storedPersistentId] of entityIdToPersistentIdMap.entries()) {
+          if (storedPersistentId === persistentIdToDelete) {
+            entityIdToDelete = entityId;
+            entityToDespawn = world.entityManager.getEntity(entityId); // <<< CORRECTED: Use getEntity
+            break; // Found the entity ID
+          }
+        }
+
+        // If we found the entity, despawn it and clean up maps
+        if (entityToDespawn && entityIdToDelete !== undefined) {
+          console.log(`[DEBUG] Found entity ${entityIdToDelete} matching persistent ID ${persistentIdToDelete}. Despawning...`);
+          entityToDespawn.despawn();
+          entityIdToPersistentIdMap.delete(entityIdToDelete); // Remove from ID mapping
+          petFollowStates.delete(entityToDespawn); // Remove from follow states if present
+          console.log(`[DEBUG] Entity ${entityIdToDelete} despawned and maps cleaned.`);
+        } else {
+          console.warn(`[WARN] Could not find active entity in world for persistent ID ${persistentIdToDelete} to despawn.`);
+        }
+        // --- END ADDED --- 
+        
+        // Get the player's session pets (existing logic)
+        const playerPets = playerSessionPets.get(playerId);
+        if (!playerPets) {
+          console.log(`[DEBUG] No session pets found for player ${player.username}`);
+          player.ui.sendData({ 
+            type: 'petDeleteFailed', 
+            persistentId: persistentIdToDelete, 
+            reason: 'No pets found'
+          });
+          return;
+        }
+        
+        // Find the pet to delete
+        const petIndex = playerPets.findIndex(pet => pet.persistentId === persistentIdToDelete);
+        if (petIndex === -1) {
+          console.log(`[DEBUG] Pet ID ${persistentIdToDelete} not found in session storage`);
+          player.ui.sendData({ 
+            type: 'petDeleteFailed', 
+            persistentId: persistentIdToDelete, 
+            reason: 'Pet not found'
+          });
+          return;
+        }
+        
+        // Remove the pet from session storage
+        playerPets.splice(petIndex, 1);
+        console.log(`[DEBUG] Removed pet from session storage. Player now has ${playerPets.length} pets`);
+        
+        // --- ADDED: Recalculate multiplier after deletion ---
+        console.log(`[Multiplier] Triggering multiplier recalculation for ${playerId} after deleting pet ${persistentIdToDelete}`);
+        calculateAndUpdateMultiplier(playerId);
+        // --- END ADDED ---
+
+        // Send confirmation back to the UI
+        player.ui.sendData({ 
+          type: 'petDeleteConfirmed', 
+          persistentId: persistentIdToDelete 
+        });
+        
+        // Also send the updated pet list
+        player.ui.sendData({
+          type: 'updateOwnedPets',
+          pets: playerPets
+        });
+      }
+    });
+
+    // --- MODIFIED: Calculate Initial Multiplier and Start Building AFTER other setup ---
+    console.log(`[Multiplier] Calculating initial multiplier for ${player.username} (${player.id})`);
+    calculateAndUpdateMultiplier(player.id); // Calculate based on any pre-existing/loaded pets
+    // startOrUpdateTowerBuilding is called inside calculateAndUpdateMultiplier if the multiplier changes
+    // If it doesn't change from default, we still need to start it:
+    if (!playerBlockIntervals.has(`tower_${player.id}`)) { 
+      // console.log(`[TowerBuild] Manually starting initial tower build for ${player.username} as multiplier didn't change from default.`); // <<< COMMENTED OUT
+      startOrUpdateTowerBuilding(player.id);
+    }
+    // --- END MODIFIED ---
+
+  }); // End JOINED_WORLD
 
   world.on(PlayerEvent.LEFT_WORLD, ({ player }: { player: Player }) => {
     console.log(`Player ${player.username} (${player.id}) left the world.`);
     
+    // --- ADDED: Cleanup Visible Prompt State ---
+    // Hide any prompt that might have been visible for the leaving player
+    const lastVisiblePrompt = playerVisiblePrompt.get(player.id);
+    if (lastVisiblePrompt) {
+      const messageType = `update${capitalizeFirstLetter(lastVisiblePrompt)}EggPrompt`;
+      // We can't send UI data *after* the player has left, 
+      // but we clean up the server state.
+      // console.log(`[UI PROMPT] Cleaning up prompt state for leaving player ${player.id}`); 
+    }
+    playerVisiblePrompt.delete(player.id); // Remove from map
+    // --- END ADDED ---
+
     // --- Cleanup player entity ---
     const playerEntity = playerEntities.get(player.id);
-    if (playerEntity) {
+    if (playerEntity && playerEntity.rawRigidBody) { // Check if rawRigidBody exists
+      // --- ADDED: Reset gravity scale on leave ---
+      // --- FIX: Attempt to set gravityScale property directly on rawRigidBody ---
+      playerEntity.rawRigidBody.gravityScale = 1;
+      // --- END FIX ---
+      // --- END ADDED ---
       playerEntity.despawn();
       playerEntities.delete(player.id);
     }
@@ -1269,26 +2073,361 @@ startServer((world: World) => {
         followState.isFollowing = false;
         followState.targetPlayerId = null;
         followState.targetEntity = null;
-        // Reset pet to idle animation
-        if (pet.modelUri === RABBIT_MODEL_URI || pet.modelUri === PIG_MODEL_URI || pet.modelUri === CHICKEN_MODEL_URI) {
-          pet.stopModelAnimations(['hop']);
-          pet.startModelLoopedAnimations(['idle']);
-        }
+        // Reset pet to idle animation based on its type
+        // <<< UPDATED check to include skipping Doge Dog >>>
+        if (pet.modelUri === BASIC_PET_MODEL_URI) {
+          if (BASIC_PET_WALK_ANIMATION) pet.stopModelAnimations([BASIC_PET_WALK_ANIMATION]);
+          if (BASIC_PET_IDLE_ANIMATION) pet.startModelLoopedAnimations([BASIC_PET_IDLE_ANIMATION]);
+        } else if (pet.modelUri === SILVER_PET_MODEL_URI) {
+          if (SILVER_PET_WALK_ANIMATION) pet.stopModelAnimations([SILVER_PET_WALK_ANIMATION]);
+          if (SILVER_PET_IDLE_ANIMATION) pet.startModelLoopedAnimations([SILVER_PET_IDLE_ANIMATION]);
+        } else if (pet.modelUri === GOLDEN_PET_MODEL_URI) {
+          if (GOLDEN_PET_WALK_ANIMATION) pet.stopModelAnimations([GOLDEN_PET_WALK_ANIMATION]);
+          if (GOLDEN_PET_IDLE_ANIMATION) pet.startModelLoopedAnimations([GOLDEN_PET_IDLE_ANIMATION]);
+        } // <<< No else if needed for DIAMOND/Doge, as it has no animations to stop/start >>>
       }
     }
     
     // Cleanup interaction state
-    playerEPressedState.delete(player.id); // Clean up E key state
+    playerEPressedState.delete(player.id);
     playerEPressedState.delete(`prompt_${player.id}`); // Clean up prompt visibility state tracking
 
     // Update leaderboard after player leaves
     playerScores.delete(player.id);
     updateLeaderboard();
+
+    console.log(`[DEBUG] Player left, cleaning up session pets`);
+    playerSessionPets.delete(player.id);
   });
 
-  // ... Rest of the code (tick handlers, update functions, etc.) ...
+  // Helper function to capitalize first letter (used for message types)
+  function capitalizeFirstLetter(str: string): string {
+      if (!str) return str;
+      return str.charAt(0).toUpperCase() + str.slice(1);
+  }
 
-}); // End startServer callback
+  // --- Function to decrease tower height ---
+  const decreaseTowerHeight = (playerId: string, blocksToRemove: number) => {
+    // --- LOGGING: Function Entry --- 
+    console.log(`[DecreaseTower][ENTRY] PlayerID: ${playerId}, BlocksToRemove: ${blocksToRemove}`);
+
+    const towerData = playerTowerData.get(playerId);
+    if (!towerData) {
+      // --- LOGGING: No Tower Data Found --- 
+      console.error(`[DecreaseTower][ERROR] No tower data found for PlayerID: ${playerId}`);
+      return;
+    }
+
+    // --- LOGGING: Tower Data Retrieved --- 
+    console.log(`[DecreaseTower][DATA] PlayerID: ${playerId}, Tower Center: (${towerData.location.center.x}, ${towerData.location.center.y}, ${towerData.location.center.z}), CurrentY: ${towerData.currentY}, LayerIndex: ${towerData.layerIndex}`);
+
+    // Calculate how many full layers we need to remove
+    const { width, depth } = towerData.location;
+    const blocksPerLayer = width * depth;
+    let remainingBlocks = blocksToRemove;
+
+    // Loop while there are blocks left to remove AND we are at or above the base Y level
+    while (remainingBlocks > 0 && towerData.currentY >= towerData.location.center.y) { 
+      
+      // If layerIndex is 0 AND we are ABOVE the base, adjust down.
+      if (towerData.layerIndex === 0 && towerData.currentY > towerData.location.center.y) {
+        towerData.currentY--; 
+        towerData.layerIndex = blocksPerLayer; 
+        console.log(`[DecreaseTower][ADJUST] PlayerID: ${playerId}, LayerIndex was 0. Moved down to Y: ${towerData.currentY}, set LayerIndex to ${towerData.layerIndex}`);
+        
+        // Re-check if we are now below the base (shouldn't happen with >= loop condition, but safe check)
+        if (towerData.currentY < towerData.location.center.y) {
+            console.log(`[DecreaseTower][ADJUST] PlayerID: ${playerId}, Hit below base after adjustment. Breaking loop.`);
+            break; 
+        }
+      }
+      // Special case: If we start an iteration ON the base layer with index 0, the tower is empty.
+      else if (towerData.layerIndex === 0 && towerData.currentY === towerData.location.center.y) {
+        console.log(`[DecreaseTower] Tower is empty (Base Y and Index 0). Stopping removal.`);
+        if (remainingBlocks > 0) {
+           console.warn(`[DecreaseTower] Requested removal (${blocksToRemove}) when tower was already empty.`);
+        }
+        remainingBlocks = 0; // Mark as done
+        break;
+      }
+      
+      // Determine blocks on the current layer (layerIndex can't be 0 here unless tower is empty)
+      const blocksOnThisLayer = towerData.layerIndex; 
+
+      // --- Logic for Full vs Partial Layer Removal ---
+      if (remainingBlocks >= blocksOnThisLayer) {
+        // --- Remove FULL Current Layer --- 
+        console.log(`[DecreaseTower][FULL LAYER] PlayerID: ${playerId}, Removing layer at Y: ${towerData.currentY}, Blocks: ${blocksOnThisLayer}`);
+        
+        // --- MODIFIED: Iterate backwards for removal ---
+        const startIndex = blocksOnThisLayer - 1; // Start from the last placed block index
+        const endIndex = 0; // End at the first block index
+        
+        for (let i = startIndex; i >= endIndex; i--) { // Loop backwards (>= 0)
+          // ... (coordinate calculation and setBlock - calculation logic remains the same) ...
+          const layerX = i % width;
+          const layerZ = Math.floor(i / width);
+          const blockX = Math.floor(towerData.location.center.x - (width / 2 - 0.5) + layerX);
+          // const blockY = towerData.currentY; // Use the potentially updated Y // <<< REMOVED Unused Variable
+          const blockZ = Math.floor(towerData.location.center.z - (depth / 2 - 0.5) + layerZ);
+          // const isCorner = (layerX === 0 || layerX === towerWidth - 1) && (layerZ === 0 || layerZ === towerDepth - 1); // <<< REMOVED Incorrect Logic
+          // const blockTypeId = isCorner ? STONE_BLOCK_ID : WOOD_BLOCK_ID; // <<< REMOVED Incorrect Logic
+          // const flooredX = Math.floor(blockX); // <<< REMOVED Redundant Floor
+          // const flooredZ = Math.floor(blockZ); // <<< REMOVED Redundant Floor
+          // const targetBlockPos = new Vector3(flooredX, blockY, flooredZ); // <<< REMOVED Incorrect Logic
+
+          // Place the actual block
+          // world.chunkLattice.setBlock(targetBlockPos, blockTypeId); // <<< REMOVED Incorrect Logic
+          // pointsAwardedThisTick++; // Count this block/point // <<< REMOVED Incorrect Logic
+
+          // Update tower state for the *next* iteration or tick
+          // towerData.layerIndex++;  // <<< REMOVED Incorrect Logic
+          
+          // Spawn visual effect (optional, can be kept or removed)
+          // <<< REMOVED Orb Spawning Logic Start >>>
+          // const playerEntity = playerEntities.get(playerId);
+          // if (playerEntity) {
+          //     const startPos = new Vector3(playerEntity.position.x, playerEntity.position.y + 0.5, playerEntity.position.z);
+          //     const endPos = new Vector3(targetBlockPos.x + 0.5, targetBlockPos.y + 0.5, targetBlockPos.z + 0.5);
+          //     // Orb logic unchanged...
+          //     const travelDuration = 0.3;
+          //     const direction = new Vector3(endPos.x - startPos.x, endPos.y - startPos.y, endPos.z - startPos.z);
+          //     const distance = direction.length;
+          //     direction.normalize(); 
+          //     const speed = distance / travelDuration;
+          //     const velocity = new Vector3(direction.x * speed, direction.y * speed, direction.z * speed);
+          //     const orbVisual = new Entity({
+          //       modelUri: 'models/projectiles/energy-orb-projectile.gltf',
+          //       modelScale: 0.3, 
+          //       rigidBodyOptions: {
+          //         type: RigidBodyType.KINEMATIC_VELOCITY, 
+          //         linearVelocity: velocity, 
+          //         colliders: [{ shape: ColliderShape.BALL, radius: 0.2, isSensor: true }]
+          //       }
+          //     });
+          //     orbVisual.spawn(world, startPos);
+          //     setTimeout(() => { orbVisual.despawn(); }, travelDuration * 1000);        
+          // }
+          // <<< REMOVED Orb Spawning Logic End >>>
+
+          // <<< RESTORED: Set block to air >>>
+          console.log(`[DecreaseTower][SET AIR - Full] PlayerID: ${playerId}, Index: ${i}, Coords: (${blockX}, ${towerData.currentY}, ${blockZ})`); // Added Index to log
+          world.chunkLattice.setBlock(new Vector3(blockX, towerData.currentY, blockZ), 0); // 0 = air
+        }
+        // --- END MODIFIED ---
+
+        remainingBlocks -= blocksOnThisLayer;
+
+        // Check if we just cleared the base layer
+        if (towerData.currentY === towerData.location.center.y) {
+            towerData.layerIndex = 0; // Mark tower as empty
+            console.log(`[DecreaseTower] Cleared base layer. Tower is now empty.`);
+            if (remainingBlocks > 0) {
+                 console.warn(`[DecreaseTower] Requested removal (${blocksToRemove}) exceeded tower height. Removed ${blocksToRemove - remainingBlocks} blocks.`);
+                 remainingBlocks = 0; // Stop further attempts
+            }
+            // Don't decrement currentY below base
+        } else {
+             // We cleared a layer above the base, set index to 0 to trigger adjustment next loop
+             towerData.layerIndex = 0;
+             // currentY will be decremented by the adjustment logic in the next iteration if needed
+        }
+
+      } else {
+        // --- Remove PARTIAL Current Layer --- 
+        console.log(`[DecreaseTower][PARTIAL LAYER] PlayerID: ${playerId}, Removing ${remainingBlocks} blocks from layer at Y: ${towerData.currentY}, Current Index: ${towerData.layerIndex}`);
+        
+        const startIndex = towerData.layerIndex - 1;
+        const endIndex = towerData.layerIndex - remainingBlocks;
+        
+        for (let i = startIndex; i >= endIndex; i--) {
+           // ... (coordinate calculation and setBlock) ...
+          const layerX = i % width;
+          const layerZ = Math.floor(i / width);
+          const blockX = Math.floor(towerData.location.center.x - (width / 2 - 0.5) + layerX);
+          const blockZ = Math.floor(towerData.location.center.z - (depth / 2 - 0.5) + layerZ);
+          console.log(`[DecreaseTower][SET AIR - Partial] PlayerID: ${playerId}, Coords: (${blockX}, ${towerData.currentY}, ${blockZ})`);
+          world.chunkLattice.setBlock(new Vector3(blockX, towerData.currentY, blockZ), 0);
+        }
+
+        towerData.layerIndex -= remainingBlocks;
+        remainingBlocks = 0; // Partial removal always finishes the job
+      }
+    }
+
+    // Final check for leftover blocks (should only happen if tower was shorter than requested removal)
+    if (remainingBlocks > 0) {
+         console.warn(`[DecreaseTower][WARN] PlayerID: ${playerId} - Requested removal (${blocksToRemove}) might have exceeded actual tower height. ${remainingBlocks} blocks could not be removed.`);
+    }
+
+    // --- Update UI & Save State --- 
+    const floorDisplayUI = playerFloorDisplayUIs.get(playerId);
+    if (floorDisplayUI) {
+      const currentFloor = Math.max(1, towerData.currentY - towerData.location.center.y + 1); // Ensure floor doesn't go below 1
+      floorDisplayUI.setState({ floor: currentFloor });
+    }
+    console.log(`[DecreaseTower][SAVE] PlayerID: ${playerId}, New CurrentY: ${towerData.currentY}, New LayerIndex: ${towerData.layerIndex}`);
+    playerTowerData.set(playerId, towerData);
+  };
+
+  // --- Multiplier Constants --- 
+  const MULTIPLIER_DEFAULT = 1.0;
+  const MULTIPLIER_CHICKEN = 1.0; 
+  const MULTIPLIER_RABBIT = 1.5;
+  const MULTIPLIER_PIG = 1.7;
+  const MULTIPLIER_COW = 2.2;   // Silver
+  const MULTIPLIER_BAT = 2.5;    // Silver
+  const MULTIPLIER_SHEEP = 2.6;  // Silver
+  const MULTIPLIER_DONKEY = 4.3; // Golden
+  const MULTIPLIER_SQUID = 4.4;  // Golden
+  const MULTIPLIER_OCELOT = 4.7; // Golden
+  const MULTIPLIER_SPIDER = 10.0; // Diamond
+  const MULTIPLIER_PAYLOAD_BOMB = 10.5; // Diamond
+  const MULTIPLIER_DD = 20.0; // Diamond (Doge Dog)
+  // Add constants for other pets later if needed
+
+  // ... existing code ...
+
+  // --- ADDED: Function to calculate and apply the highest applicable multiplier --- 
+  const calculateAndUpdateMultiplier = (playerId: string) => {
+    const playerPets = playerSessionPets.get(playerId) || [];
+    // --- MODIFIED: Start with base multiplier and add bonuses --- 
+    let stackedMultiplier = MULTIPLIER_DEFAULT; // Start with 1.0x
+
+    // Keep track of unique pet types encountered to avoid stacking same bonus multiple times if player has duplicates
+    const countedPetTypes = new Set<string>(); 
+
+    // Iterate through the player's session pets
+    for (const pet of playerPets) {
+      // Check BASIC pets
+      if (pet.rarity === EggType.BASIC) { 
+        const petTypeLower = pet.type.toLowerCase();
+        if (!countedPetTypes.has(petTypeLower)) {
+          switch (petTypeLower) {
+            case 'chicken':
+              // Bonus = 0
+              countedPetTypes.add(petTypeLower);
+              break;
+            case 'rabbit':
+              stackedMultiplier += (MULTIPLIER_RABBIT - MULTIPLIER_DEFAULT); 
+              countedPetTypes.add(petTypeLower);
+              break;
+            case 'pig':
+              stackedMultiplier += (MULTIPLIER_PIG - MULTIPLIER_DEFAULT); 
+              countedPetTypes.add(petTypeLower);
+              break;
+          }
+        }
+      }
+      // --- ADDED: Check SILVER pets --- 
+      else if (pet.rarity === EggType.SILVER) {
+        const petTypeLower = pet.type.toLowerCase();
+        if (!countedPetTypes.has(petTypeLower)) {
+            switch (petTypeLower) {
+                case 'cow':
+                    stackedMultiplier += (MULTIPLIER_COW - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+                case 'bat':
+                    stackedMultiplier += (MULTIPLIER_BAT - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+                case 'sheep':
+                    stackedMultiplier += (MULTIPLIER_SHEEP - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+            }
+        }
+      }
+      // --- ADDED: Check GOLDEN pets --- 
+      else if (pet.rarity === EggType.GOLDEN) {
+        const petTypeLower = pet.type.toLowerCase();
+        if (!countedPetTypes.has(petTypeLower)) {
+            switch (petTypeLower) {
+                case 'donkey':
+                    stackedMultiplier += (MULTIPLIER_DONKEY - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+                case 'squid':
+                    stackedMultiplier += (MULTIPLIER_SQUID - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+                case 'ocelot':
+                    stackedMultiplier += (MULTIPLIER_OCELOT - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+            }
+        }
+      }
+      // --- ADDED: Check DIAMOND pets --- 
+      else if (pet.rarity === EggType.DIAMOND) {
+        const petTypeLower = pet.type.toLowerCase();
+        if (!countedPetTypes.has(petTypeLower)) {
+            switch (petTypeLower) {
+                case 'spider':
+                    stackedMultiplier += (MULTIPLIER_SPIDER - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+                case 'payload bomb': // Make sure the type matches how it was saved
+                    stackedMultiplier += (MULTIPLIER_PAYLOAD_BOMB - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+                case 'dd': // Make sure the type matches how it was saved (Doge Dog)
+                    stackedMultiplier += (MULTIPLIER_DD - MULTIPLIER_DEFAULT);
+                    countedPetTypes.add(petTypeLower);
+                    break;
+            }
+        }
+      }
+      // --- END ADDED --- 
+       // TODO: Add checks for DIAMOND pets later
+    }
+
+    // Get the current multiplier to see if it changed
+    const currentMultiplier = playerMultipliers.get(playerId) ?? MULTIPLIER_DEFAULT;
+
+    if (stackedMultiplier !== currentMultiplier) {
+      console.log(`[Multiplier] Updating multiplier for ${playerId} from ${currentMultiplier.toFixed(1)}x to ${stackedMultiplier.toFixed(1)}x`);
+      playerMultipliers.set(playerId, stackedMultiplier);
+      // Restart tower building with the new speed
+      startOrUpdateTowerBuilding(playerId);
+    } else {
+      // console.log(`[Multiplier] Multiplier for ${playerId} remains ${stackedMultiplier.toFixed(1)}x`); // Optional: Log if no change
+    }
+  };
+  // --- END ADDED --- 
+
+  // --- ADDED: Function to handle moving player up while hovering ---
+  const updateHoveringPlayerPosition = (playerId: string) => {
+    const towerData = playerTowerData.get(playerId);
+    const playerEntity = playerEntities.get(playerId);
+
+    // Only proceed if player exists, has tower data, and is currently hovering
+    if (playerEntity && towerData?.isHovering) {
+        // Calculate the Y level of the topmost block (same logic as in teleport request)
+        const topBlockY = towerData.layerIndex === 0 && towerData.currentY > towerData.location.center.y
+                            ? towerData.currentY - 1
+                            : towerData.currentY;
+
+        // Calculate the target hover position
+        const hoverY = topBlockY + 1.5; // Keep Y offset consistent
+        const hoverDestination = new Vector3(towerData.location.center.x, hoverY, towerData.location.center.z);
+
+        // Teleport player smoothly to the new hover position
+        // Check if the player is already close to avoid unnecessary teleport calls
+        const currentPos = playerEntity.position;
+        const distanceSq = (currentPos.x - hoverDestination.x)**2 + (currentPos.y - hoverDestination.y)**2 + (currentPos.z - hoverDestination.z)**2;
+        
+        if (distanceSq > 0.01) { // Only teleport if not already very close
+             console.log(`[Hover Update] Moving ${playerEntity.player.username} to ${hoverDestination.x.toFixed(2)}, ${hoverDestination.y.toFixed(2)}, ${hoverDestination.z.toFixed(2)}`);
+             // <<< FIX: Use setPosition instead of teleport >>>
+             playerEntity.setPosition(hoverDestination);
+        }
+    }
+  };
+  // --- END ADDED ---
+
+}); // End startServer
 
 // Placeholder for LeaderboardEntry if not defined elsewhere
 interface LeaderboardEntry {
@@ -1343,7 +2482,7 @@ const EGG_SHAKE_AMPLITUDE = 0.05; // How much the egg shakes vertically
 const BASIC_PET_MODEL_URI = 'models/npcs/rabbit.gltf';
 const BASIC_PET_SCALE = 0.6;
 const BASIC_PET_IDLE_ANIMATION = 'idle';
-const BASIC_PET_WALK_ANIMATION = 'hop';
+const BASIC_PET_WALK_ANIMATION = 'walk'; // Example
 
 // Constants for Silver Pet (Sheep)
 const SILVER_PET_MODEL_URI = 'models/npcs/sheep.gltf'; // <<< SHEEP MODEL
@@ -1351,6 +2490,136 @@ const SILVER_PET_SCALE = 0.6; // Scale for sheep (adjusted to 0.6)
 const SILVER_PET_IDLE_ANIMATION = 'idle'; // Idle animation for sheep
 const SILVER_PET_WALK_ANIMATION = 'walk'; // Walk animation for sheep
 
+// --- UPDATED: Constants for Golden Pet (Donkey - Ground) ---
+const GOLDEN_PET_MODEL_URI = 'models/npcs/donkey.gltf';   // <<< Path to Donkey model
+const GOLDEN_PET_SCALE = 0.6;                           // <<< Scale for Donkey
+const GOLDEN_PET_IDLE_ANIMATION = 'idle';               // <<< Idle animation for Donkey
+const GOLDEN_PET_WALK_ANIMATION = 'walk';               // <<< Walk animation for Donkey
+
 // Constants for Pet Following Behavior
 const PET_FOLLOW_DISTANCE = 2.5; // How close the pet stays to the player
 const PET_HOVER_OFFSET_Y = 1.5; // How high flying pets hover above player's base
+
+// --- UPDATED: Constants for Diamond Pet (Doge Dog - Spinning) ---
+const DIAMOND_PET_MODEL_URI = 'models/npcs/dogedog2.glb'; // Path to Doge Dog model
+const DIAMOND_PET_SCALE = 0.7;                           // Scale for Doge Dog
+const DIAMOND_PET_IDLE_ANIMATION = ''; // No idle animation
+const DIAMOND_PET_WALK_ANIMATION = ''; // No walk animation
+
+// --- ADDED: Constants for Pig Pet --- 
+const PIG_MODEL_URI = 'models/npcs/pig.gltf';
+const PIG_MODEL_SCALE = 0.4; // Reduced size
+const PIG_IDLE_ANIMATION = 'idle'; // Assuming standard 'idle'
+const PIG_WALK_ANIMATION = 'walk'; // Assuming standard 'walk'
+
+// --- ADDED: Constants for Chicken Pet --- 
+const CHICKEN_MODEL_URI = 'models/npcs/chicken.gltf'; 
+const CHICKEN_MODEL_SCALE = 0.3; // Made smaller than pig
+const CHICKEN_IDLE_ANIMATION = 'idle'; // Assuming standard 'idle'
+const CHICKEN_WALK_ANIMATION = 'walk'; // Assuming standard 'walk'
+
+// --- ADDED: Constants for Silver Egg Pets ---
+const COW_MODEL_URI = 'models/npcs/cow.gltf';
+const COW_MODEL_SCALE = 0.6; 
+const COW_IDLE_ANIMATION = 'idle';
+const COW_WALK_ANIMATION = 'walk';
+
+const BAT_MODEL_URI = 'models/npcs/bat.gltf';
+const BAT_MODEL_SCALE = 0.3;
+const BAT_IDLE_ANIMATION = 'idle'; // Assuming 'idle', might be 'fly' or similar
+const BAT_WALK_ANIMATION = 'idle'; // MODIFIED: Use 'idle' (wing flap) for movement too
+
+const SHEEP_MODEL_URI = 'models/npcs/sheep.gltf';
+const SHEEP_MODEL_SCALE = 0.5;
+const SHEEP_IDLE_ANIMATION = 'idle';
+const SHEEP_WALK_ANIMATION = 'walk';
+// --- END ADDED ---
+
+// --- ADDED: Constants for Golden Egg Pets ---
+const DONKEY_MODEL_URI = 'models/npcs/donkey.gltf';
+const DONKEY_MODEL_SCALE = 0.7;
+const DONKEY_IDLE_ANIMATION = 'idle';
+const DONKEY_WALK_ANIMATION = 'walk';
+
+const SQUID_MODEL_URI = 'models/npcs/squid.gltf';
+const SQUID_MODEL_SCALE = 0.5;
+const SQUID_IDLE_ANIMATION = 'idle'; // Placeholder - might need adjustment
+const SQUID_WALK_ANIMATION = 'walk'; // Placeholder for flying animation
+
+const OCELOT_MODEL_URI = 'models/npcs/ocelot.gltf';
+const OCELOT_MODEL_SCALE = 0.4;
+const OCELOT_IDLE_ANIMATION = 'idle';
+const OCELOT_WALK_ANIMATION = 'walk';
+// --- END ADDED ---
+
+// --- ADDED: Constants for Diamond Egg Pets (Spider) ---
+const SPIDER_MODEL_URI = 'models/npcs/spider.gltf';
+const SPIDER_MODEL_SCALE = 0.5; // Example scale
+const SPIDER_IDLE_ANIMATION = 'idle';
+const SPIDER_WALK_ANIMATION = 'walk';
+// --- END ADDED ---
+
+// --- ADDED: Constants for Payload Bomb ---
+const PAYLOAD_BOMB_MODEL_URI = 'models/npcs/payload-bomb.gltf';
+const PAYLOAD_BOMB_SCALE = 0.4;
+const PAYLOAD_BOMB_WALK_ANIMATION = 'walk'; // Only has walk animation
+// --- END ADDED ---
+
+// --- Constants for Egg Interactions ---
+// ... existing code ...
+
+// --- ADDED: Handler for owned pets request ---
+const handleOwnedPetsRequest = ({ player }: { player: Player }) => {
+  console.log('[DEBUG] Handling owned pets request');
+  
+  const playerPets = playerSessionPets.get(player.id) || [];
+  console.log(`[DEBUG] Found ${playerPets.length} session pets for player`);
+  
+  player.ui.sendData({
+    type: 'updateOwnedPets',
+    pets: playerPets
+  });
+};
+
+// --- ADDED: Handler for delete pet request ---
+const handleDeletePet = ({ player, data }: { player: Player, data: any }) => {
+  console.log('[DEBUG] Handling delete pet request:', data);
+  
+  const playerPets = playerSessionPets.get(player.id);
+  if (!playerPets) {
+    console.log('[DEBUG] No pets found for player');
+    player.ui.sendData({ type: 'petDeleteFailed', persistentId: data.persistentId, reason: 'No pets found' });
+    return;
+  }
+  
+  const petIndex = playerPets.findIndex(pet => pet.persistentId === data.persistentId);
+  if (petIndex === -1) {
+    console.log('[DEBUG] Pet not found in session storage');
+    player.ui.sendData({ type: 'petDeleteFailed', persistentId: data.persistentId, reason: 'Pet not found' });
+    return;
+  }
+  
+  // Remove pet from session storage
+  playerPets.splice(petIndex, 1);
+  console.log(`[DEBUG] Removed pet from session storage. Player now has ${playerPets.length} pets`);
+  
+  // Send confirmation to UI
+  player.ui.sendData({ type: 'petDeleteConfirmed', persistentId: data.persistentId });
+  
+  // Also send updated pets list
+  player.ui.sendData({
+    type: 'updateOwnedPets',
+    pets: playerPets
+  });
+};
+
+// --- Add a utility function for generating IDs ---
+const generateId = (): string => {
+  return Date.now() + '-' + Math.random().toString(36).substring(2, 7);
+};
+
+// Egg Costs
+const COST_EGG_BASIC = 150;
+const COST_EGG_SILVER = 350;
+const COST_EGG_GOLDEN = 500;
+const COST_EGG_DIAMOND = 1000;

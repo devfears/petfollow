@@ -36,12 +36,20 @@ and also configure additional buttons for mobile compatibility.
     }
 
     // --- ADDED: Handle Egg Prompt Updates ---
-    if (data.type === 'updateChickenEggPrompt') {
+    if (data.type === 'updateBasicEggPrompt') {
       const eggPromptElement = document.getElementById('eggPrompt');
       if (eggPromptElement) {
-        console.log('Received updateChickenEggPrompt:', data.visible); // Updated log
+        console.log('Received updateBasicEggPrompt:', data.visible, 'Cost:', data.cost); // Updated log message too
         if (data.visible) {
           eggPromptElement.classList.add('visible');
+          // --- ADDED: Update Cost Text ---
+          if (data.cost !== undefined) {
+            const costElement = eggPromptElement.querySelector('.egg-cost');
+            if (costElement) {
+              costElement.textContent = data.cost + ' Points';
+            }
+          }
+          // --- END ADDED ---
         } else {
           eggPromptElement.classList.remove('visible');
         }
@@ -51,9 +59,17 @@ and also configure additional buttons for mobile compatibility.
     } else if (data.type === 'updateSilverEggPrompt') {
       const eggPromptElement = document.getElementById('silverEggPrompt');
       if (eggPromptElement) {
-        console.log('Received updateSilverEggPrompt:', data.visible);
+        console.log('Received updateSilverEggPrompt:', data.visible, 'Cost:', data.cost);
         if (data.visible) {
           eggPromptElement.classList.add('visible');
+          // --- ADDED: Update Cost Text ---
+          if (data.cost !== undefined) {
+            const costElement = eggPromptElement.querySelector('.egg-cost');
+            if (costElement) {
+              costElement.textContent = data.cost + ' Points';
+            }
+          }
+          // --- END ADDED ---
         } else {
           eggPromptElement.classList.remove('visible');
         }
@@ -63,9 +79,17 @@ and also configure additional buttons for mobile compatibility.
     } else if (data.type === 'updateGoldenEggPrompt') {
       const eggPromptElement = document.getElementById('goldenEggPrompt');
       if (eggPromptElement) {
-        console.log('Received updateGoldenEggPrompt:', data.visible);
+        console.log('Received updateGoldenEggPrompt:', data.visible, 'Cost:', data.cost);
         if (data.visible) {
           eggPromptElement.classList.add('visible');
+          // --- ADDED: Update Cost Text ---
+          if (data.cost !== undefined) {
+            const costElement = eggPromptElement.querySelector('.egg-cost');
+            if (costElement) {
+              costElement.textContent = data.cost + ' Points';
+            }
+          }
+          // --- END ADDED ---
         } else {
           eggPromptElement.classList.remove('visible');
         }
@@ -75,9 +99,17 @@ and also configure additional buttons for mobile compatibility.
     } else if (data.type === 'updateDiamondEggPrompt') {
       const eggPromptElement = document.getElementById('diamondEggPrompt');
       if (eggPromptElement) {
-        console.log('Received updateDiamondEggPrompt:', data.visible);
+        console.log('Received updateDiamondEggPrompt:', data.visible, 'Cost:', data.cost);
         if (data.visible) {
           eggPromptElement.classList.add('visible');
+          // --- ADDED: Update Cost Text ---
+          if (data.cost !== undefined) {
+            const costElement = eggPromptElement.querySelector('.egg-cost');
+            if (costElement) {
+              costElement.textContent = data.cost + ' Points';
+            }
+          }
+          // --- END ADDED ---
         } else {
           eggPromptElement.classList.remove('visible');
         }
@@ -90,20 +122,41 @@ and also configure additional buttons for mobile compatibility.
 
   // Function to update the leaderboard UI with new data
   function updateLeaderboard(leaderboardData) {
-    const entries = document.querySelectorAll('.leaderboard-entry');
-    
-    // Update each leaderboard entry with data if available
-    entries.forEach((entry, index) => {
-      if (index < leaderboardData.length) {
-        const playerData = leaderboardData[index];
-        const rankElem = entry.querySelector('.rank');
-        const nameElem = entry.querySelector('.player-name');
-        const scoreElem = entry.querySelector('.score');
-        
-        if (rankElem) rankElem.textContent = index + 1;
-        if (nameElem) nameElem.textContent = playerData.name || `Player${index+1}`;
-        if (scoreElem) scoreElem.textContent = playerData.score || 0;
-      }
+    const leaderboardList = document.querySelector('.leaderboard-entries'); // <<< Target the container class
+    if (!leaderboardList) {
+      console.error("Leaderboard container .leaderboard-entries not found!"); // Update error message
+      return;
+    }
+
+    // Clear existing entries
+    leaderboardList.innerHTML = ''; 
+
+    // Create and add new entries based on received data
+    leaderboardData.forEach((playerData, index) => {
+      // Create the main entry div
+      const entryDiv = document.createElement('div');
+      entryDiv.classList.add('leaderboard-entry');
+
+      // Create and add Rank span
+      const rankSpan = document.createElement('span');
+      rankSpan.classList.add('rank');
+      rankSpan.textContent = index + 1;
+      entryDiv.appendChild(rankSpan);
+
+      // Create and add Name span
+      const nameSpan = document.createElement('span');
+      nameSpan.classList.add('player-name');
+      nameSpan.textContent = playerData.name; // Use data directly
+      entryDiv.appendChild(nameSpan);
+
+      // Create and add Score span
+      const scoreSpan = document.createElement('span');
+      scoreSpan.classList.add('score');
+      scoreSpan.textContent = playerData.score; // Use data directly
+      entryDiv.appendChild(scoreSpan);
+
+      // Append the new entry to the list
+      leaderboardList.appendChild(entryDiv);
     });
   }
 
@@ -111,6 +164,7 @@ and also configure additional buttons for mobile compatibility.
   const teleportButton = document.getElementById('teleport-button');
   if (teleportButton) {
     teleportButton.addEventListener('click', () => {
+      console.log("--- [DEBUG] Teleport Button Clicked (Client-side) ---");
       console.log("Teleport button clicked (Client-side), sending request to server...");
       // Send a message to the server requesting teleport
       hytopia.sendData({ type: 'requestTowerTeleport' });
@@ -182,7 +236,7 @@ and also configure additional buttons for mobile compatibility.
       // Apply the status class to the container
       if (statusContainer && state && typeof state.statusClass === 'string') {
         // Remove previous status classes before adding the new one
-        statusContainer.classList.remove('status-basic', 'status-normal'); 
+        statusContainer.classList.remove('status-basic', 'status-normal', 'status-rare', 'status-cool', 'status-mythic'); 
         statusContainer.classList.add(state.statusClass);
       } 
     });
@@ -278,26 +332,7 @@ and also configure additional buttons for mobile compatibility.
   <div class="leaderboard-panel">
     <div class="leaderboard-title">Leaderboard</div>
     <div class="leaderboard-entries">
-      <div class="leaderboard-entry">
-        <div class="rank">1</div>
-        <div class="player-name">Player1</div>
-        <div class="score">120</div>
-      </div>
-      <div class="leaderboard-entry">
-        <div class="rank">2</div>
-        <div class="player-name">Player2</div>
-        <div class="score">95</div>
-      </div>
-      <div class="leaderboard-entry">
-        <div class="rank">3</div>
-        <div class="player-name">Player3</div>
-        <div class="score">87</div>
-      </div>
-      <div class="leaderboard-entry">
-        <div class="rank">4</div>
-        <div class="player-name">Player4</div>
-        <div class="score">64</div>
-      </div>
+      <!-- Entries will be dynamically added here by JS -->
     </div>
   </div>
   
@@ -321,7 +356,10 @@ and also configure additional buttons for mobile compatibility.
       <img src="{{CDN_ASSETS_URL}}/animals/rabbit.png" alt="Rabbit">
       <img src="{{CDN_ASSETS_URL}}/animals/pig.png" alt="Pig">
     </div>
-    <div class="text">Free</div>
+    <!-- ADDED: Percentage Display -->
+    <div class="percentages">Chicken: 50% | Rabbit: 30% | Pig: 20%</div>
+    <!-- END ADDED -->
+    <div class="text egg-cost">10 Points</div> <!-- MODIFIED: Added egg-cost class -->
   </div>
   <!-- END ADDED: Egg Prompt HTML Structure -->
 
@@ -394,10 +432,10 @@ and also configure additional buttons for mobile compatibility.
       background-color: rgba(139, 69, 19, 0.8); /* Brown background */
       border: 1px solid rgba(160, 82, 45, 0.9); /* Sienna border */
     }
-    /* ADDED: Style for Basic status text color */
+    /* ADDED: Style for Basic status text color - UPDATED to Brown */
     .status-tag-container.status-basic .animal-status {
-       color: #FFD700; /* Gold text color for contrast */
-       text-shadow: 0 0 8px rgba(255, 215, 0, 0.7); /* Glowing gold shadow */
+       color: #A0522D; /* Sienna brown text color */
+       text-shadow: 0 0 6px rgba(80, 40, 10, 0.7); /* Darker brown shadow */
     }
      /* ADDED: Style for Normal status background (default gray) */
     .status-tag-container.status-normal {
@@ -409,6 +447,52 @@ and also configure additional buttons for mobile compatibility.
        color: #aaaaaa; /* Grey text color */
        text-shadow: 0 0 8px rgba(170, 170, 170, 0.7); /* Glowing gray shadow */
     }
+    
+    /* --- NEW: Style for Rare status (Silver) --- */
+    .status-tag-container.status-rare {
+      background-color: rgba(180, 180, 180, 0.8); /* Light gray background */
+      border: 1px solid rgba(210, 210, 210, 0.9); /* Lighter gray border */
+    }
+    .status-tag-container.status-rare .animal-status {
+       color: #E0E0E0; /* Very light gray/silver text */
+       text-shadow: 0 0 10px rgba(220, 220, 220, 0.8); /* Glowing silver shadow */
+    }
+    
+    /* --- NEW: Style for Cool status (Gold) --- */
+    .status-tag-container.status-cool {
+      background-color: rgba(255, 190, 0, 0.85); /* Brighter gold background */
+      border: 1px solid rgba(255, 215, 50, 0.9); /* Lighter, brighter gold border */
+    }
+    .status-tag-container.status-cool .animal-status {
+       color: #FFFFE0; /* Lighter Yellow text */
+       text-shadow: 0 0 10px rgba(255, 223, 0, 0.9); /* Stronger Glowing gold shadow */
+    }
+
+    /* --- UPDATED: Style for Mythic status (Rainbow Text) --- */
+    .status-tag-container.status-mythic {
+      background-color: rgba(100, 100, 100, 0.7); /* Keep a neutral background */
+      border: 1px solid rgba(150, 150, 150, 0.9); /* Neutral border */
+    }
+    .status-tag-container.status-mythic .animal-status {
+       /* Remove static color/shadow */
+       /* color: #E0FFFF; */
+       /* text-shadow: 0 0 10px rgba(100, 255, 255, 0.9); */
+       animation: rainbow-text 1.5s linear infinite; /* Apply rainbow animation */
+    }
+    /* --- END NEW STYLES --- */
+
+    /* --- ADDED: Rainbow Text Keyframes --- */
+    @keyframes rainbow-text {
+      0%    { color: hsl(0, 100%, 70%); text-shadow: 0 0 8px hsl(0, 100%, 60%); }
+      14%   { color: hsl(45, 100%, 70%); text-shadow: 0 0 8px hsl(45, 100%, 60%); }
+      28%   { color: hsl(90, 100%, 70%); text-shadow: 0 0 8px hsl(90, 100%, 60%); }
+      42%   { color: hsl(135, 100%, 70%); text-shadow: 0 0 8px hsl(135, 100%, 60%); }
+      57%   { color: hsl(180, 100%, 70%); text-shadow: 0 0 8px hsl(180, 100%, 60%); }
+      71%   { color: hsl(225, 100%, 70%); text-shadow: 0 0 8px hsl(225, 100%, 60%); }
+      85%   { color: hsl(270, 100%, 70%); text-shadow: 0 0 8px hsl(270, 100%, 60%); }
+      100%  { color: hsl(315, 100%, 70%); text-shadow: 0 0 8px hsl(315, 100%, 60%); }
+    }
+    /* --- END ADDED KEYFRAMES --- */
   </style>
   <div class="nametag-wrapper"> <!-- Main wrapper -->
     <div class="owner-tag-container"> <!-- Owner tag -->
@@ -599,6 +683,7 @@ and also configure additional buttons for mobile compatibility.
     cursor: pointer;
     font-size: 14px;
     z-index: 1001; /* Ensure it's above other elements */
+    pointer-events: auto; /* <<< ADDED: Explicitly allow clicks */
   }
 
   #teleport-button:hover {
@@ -829,14 +914,95 @@ and also configure additional buttons for mobile compatibility.
     color: #00ffaa; /* Bright color for emphasis */
     text-shadow: 0 0 5px rgba(0, 255, 170, 0.5);
   }
+
+  /* --- ADDED: Styling for Percentage Text --- */
+  #eggPrompt .percentages {
+    font-size: 0.9em; /* Slightly smaller */
+    color: #f0f0f0; /* Lighter grey, less prominent */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7); /* Subtle shadow */
+    text-align: center; /* Ensure text itself is centered */
+    /* align-items: center on #eggPrompt already centers the div */
+  }
+  /* --- END ADDED --- */
+
+  /* --- ADDED: Styling for Silver Egg Percentage Text --- */
+  #silverEggPrompt .percentages {
+    font-size: 0.9em; /* Slightly smaller */
+    color: #f0f0f0; /* Lighter grey, less prominent */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7); /* Subtle shadow */
+    text-align: center; /* Ensure text itself is centered */
+  }
+  /* --- END ADDED --- */
+
+  /* --- ADDED: Styling for Golden Egg Percentage Text --- */
+  #goldenEggPrompt .percentages {
+    font-size: 0.9em; /* Slightly smaller */
+    color: #f0f0f0; /* Lighter grey, less prominent */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7); /* Subtle shadow */
+    text-align: center; /* Ensure text itself is centered */
+  }
+  /* --- END ADDED --- */
+
+  /* --- ADDED: Styling for Diamond Egg Percentage Text --- */
+  #diamondEggPrompt .percentages {
+    font-size: 0.9em; /* Slightly smaller */
+    color: #f0f0f0; /* Lighter grey, less prominent */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7); /* Subtle shadow */
+    text-align: center; /* Ensure text itself is centered */
+  }
+  /* --- END ADDED --- */
+
   /* --- END ADDED: Egg Prompt Styling --- */
 
   /* TODO: CSS for block-counter-scene-ui might be needed here if not defined elsewhere */
 
+  /* --- ADDED: Mythic Rarity Styles --- */
+  /* Style for Mythic border/container (Rainbow Animation) */
+  .mythic-rarity {
+    /* Apply rainbow animation to border and shadow */
+    animation: rainbow-border 1.5s linear infinite; 
+  }
+  
+  /* Style for Mythic text (Rainbow Animation) */
+  .mythic-text {
+    font-weight: bold; /* Keep bold */
+    animation: rainbow-text 1.5s linear infinite; /* Apply rainbow animation */
+    /* Ensure background or other styles don't interfere */
+    background: none; 
+    -webkit-text-stroke: initial; /* Reset any text stroke */
+    text-stroke: initial;
+    opacity: 1; /* Ensure full opacity */
+    font-size: 12px; /* Match other rarity font size slightly increased */
+  }
+  
+  /* Ensure rainbow keyframes are available (copied from Scene UI) */
+  @keyframes rainbow-text {
+      0%    { color: hsl(0, 100%, 70%); text-shadow: 0 0 8px hsl(0, 100%, 60%); }
+      14%   { color: hsl(45, 100%, 70%); text-shadow: 0 0 8px hsl(45, 100%, 60%); }
+      28%   { color: hsl(90, 100%, 70%); text-shadow: 0 0 8px hsl(90, 100%, 60%); }
+      42%   { color: hsl(135, 100%, 70%); text-shadow: 0 0 8px hsl(135, 100%, 60%); }
+      57%   { color: hsl(180, 100%, 70%); text-shadow: 0 0 8px hsl(180, 100%, 60%); }
+      71%   { color: hsl(225, 100%, 70%); text-shadow: 0 0 8px hsl(225, 100%, 60%); }
+      85%   { color: hsl(270, 100%, 70%); text-shadow: 0 0 8px hsl(270, 100%, 60%); }
+      100%  { color: hsl(315, 100%, 70%); text-shadow: 0 0 8px hsl(315, 100%, 60%); }
+  }
+  /* --- END ADDED KEYFRAMES --- */
+
+  /* --- ADDED: Keyframes for Rainbow Border --- */
+  @keyframes rainbow-border {
+      0%    { border-color: hsl(0, 100%, 70%); box-shadow: 0 0 8px hsl(0, 100%, 60%); }
+      14%   { border-color: hsl(45, 100%, 70%); box-shadow: 0 0 8px hsl(45, 100%, 60%); }
+      28%   { border-color: hsl(90, 100%, 70%); box-shadow: 0 0 8px hsl(90, 100%, 60%); }
+      42%   { border-color: hsl(135, 100%, 70%); box-shadow: 0 0 8px hsl(135, 100%, 60%); }
+      57%   { border-color: hsl(180, 100%, 70%); box-shadow: 0 0 8px hsl(180, 100%, 60%); }
+      71%   { border-color: hsl(225, 100%, 70%); box-shadow: 0 0 8px hsl(225, 100%, 60%); }
+      85%   { border-color: hsl(270, 100%, 70%); box-shadow: 0 0 8px hsl(270, 100%, 60%); }
+      100%  { border-color: hsl(315, 100%, 70%); box-shadow: 0 0 8px hsl(315, 100%, 60%); }
+  }
+  /* --- END ADDED --- */
+
 </style>
 
-<!-- Button to teleport to tower top -->
-<button id="teleport-button">Teleport to Tower</button>
 
 <!-- ADDED: Egg Prompt HTML Structure -->
 <div id="eggPrompt">
@@ -846,36 +1012,419 @@ and also configure additional buttons for mobile compatibility.
     <img src="{{CDN_ASSETS_URL}}/animals/rabbit.png" alt="Rabbit">
     <img src="{{CDN_ASSETS_URL}}/animals/pig.png" alt="Pig">
   </div>
-  <div class="text">Free</div>
+  <!-- ADDED: Percentage Display -->
+  <div class="percentages">Chicken: 50% | Rabbit: 30% | Pig: 20%</div>
+  <!-- END ADDED -->
+  <div class="text egg-cost">10 Points</div> <!-- MODIFIED: Added egg-cost class -->
 </div>
 <!-- END ADDED: Egg Prompt HTML Structure -->
 
 <!-- Duplicated for Silver Egg -->
 <div id="silverEggPrompt">
   <div class="images">
-    <img src="{{CDN_ASSETS_URL}}/animals/bat.png" alt="Bat">
+    <!-- MODIFIED: Reordered images -->
     <img src="{{CDN_ASSETS_URL}}/animals/cow.png" alt="Cow">
+    <img src="{{CDN_ASSETS_URL}}/animals/bat.png" alt="Bat">
     <img src="{{CDN_ASSETS_URL}}/animals/sheep.png" alt="Sheep">
   </div>
-  <div class="text">Free</div>
+  <!-- ADDED: Percentage Display -->
+  <div class="percentages">Cow: 50% | Bat: 36% | Sheep: 14%</div>
+  <!-- END ADDED -->
+  <div class="text egg-cost">25 Points</div> <!-- MODIFIED: Added egg-cost class -->
 </div>
 
 <!-- Duplicated for Golden Egg -->
 <div id="goldenEggPrompt">
   <div class="images">
-    <img src="{{CDN_ASSETS_URL}}/blocks/gold.png" alt="Gold Animal 1"> <!-- Placeholder -->
-    <img src="{{CDN_ASSETS_URL}}/blocks/gold.png" alt="Gold Animal 2"> <!-- Placeholder -->
-    <img src="{{CDN_ASSETS_URL}}/blocks/gold.png" alt="Gold Animal 3"> <!-- Placeholder -->
+    <!-- MODIFIED: Reordered images -->
+    <img src="{{CDN_ASSETS_URL}}/animals/donkey.png" alt="Donkey">
+    <img src="{{CDN_ASSETS_URL}}/animals/squid.png" alt="Squid">
+    <img src="{{CDN_ASSETS_URL}}/animals/ocelot.png" alt="Ocelot">
   </div>
-  <div class="text">Free</div>
+  <!-- ADDED: Percentage Display -->
+  <div class="percentages">Donkey: 61.5% | Squid: 28.3% | Ocelot: 10.2%</div>
+  <!-- END ADDED -->
+  <div class="text egg-cost">50 Points</div> <!-- MODIFIED: Added egg-cost class -->
 </div>
 
 <!-- Duplicated for Diamond Egg -->
 <div id="diamondEggPrompt">
   <div class="images">
-    <img src="{{CDN_ASSETS_URL}}/blocks/diamond.png" alt="Diamond Animal 1"> <!-- Placeholder -->
-    <img src="{{CDN_ASSETS_URL}}/blocks/diamond.png" alt="Diamond Animal 2"> <!-- Placeholder -->
-    <img src="{{CDN_ASSETS_URL}}/blocks/diamond.png" alt="Diamond Animal 3"> <!-- Placeholder -->
+    <!-- Order: Spider, Bomb, DD -->
+    <img src="{{CDN_ASSETS_URL}}/animals/spider.png" alt="Spider">
+    <img src="{{CDN_ASSETS_URL}}/animals/payload-bomb.png" alt="Payload Bomb">
+    <img src="{{CDN_ASSETS_URL}}/animals/dogedog.png" alt="Doge Dog">
   </div>
-  <div class="text">Free</div>
+  <!-- ADDED: Percentage Display -->
+  <div class="percentages">Spider: 75% | Payload Bomb: 20% | DD: 5%</div>
+  <!-- END ADDED -->
+  <div class="text egg-cost">100 Points</div> <!-- MODIFIED: Added egg-cost class -->
 </div>
+
+<!-- *** ADDED Pet Locker Button *** -->
+<button id="pet-locker-button">Pets</button>
+
+<!-- *** ADDED Pet Locker Panel (Initially Hidden) *** -->
+<div id="pet-locker-panel">
+  <h3>Your Pets</h3>
+  <div id="pet-locker-list">
+    <!-- Pet entries will be dynamically added here -->
+  </div>
+  <button id="close-pet-locker-button">Close</button> 
+</div>
+
+<style>
+  /* *** ADDED Pet Locker Button Styling *** */
+  #pet-locker-button {
+    position: fixed; /* Position relative to the viewport */
+    right: 20px; /* Distance from the right edge */
+    top: 50%; /* Center vertically */
+    transform: translateY(-50%); /* Adjust vertical centering */
+    width: 60px; /* Button width */
+    height: 60px; /* Button height */
+    background-color: rgba(50, 50, 80, 0.8); /* Button background color */
+    color: white; /* Text color */
+    border: 2px solid rgba(150, 150, 180, 0.7); /* Border color */
+    border-radius: 50%; /* Make it circular */
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    z-index: 1001; /* Ensure it's above other elements */
+    transition: background-color 0.3s ease;
+  }
+
+  #pet-locker-button:hover {
+    background-color: rgba(70, 70, 100, 0.9); /* Slightly lighter on hover */
+  }
+
+  /* *** ADDED Pet Locker Panel Styling *** */
+  #pet-locker-panel {
+    display: none; /* Initially hidden */
+    position: fixed; /* Position relative to the viewport */
+    top: 50%; /* Center vertically */
+    left: 50%; /* Center horizontally */
+    transform: translate(-50%, -50%); /* Offset by half width/height */
+    width: 300px; /* Panel width - increased slightly */
+    max-height: 400px; /* Limit height */
+    overflow-y: auto; /* Add scroll if content exceeds max-height */
+    background: linear-gradient(to bottom, rgba(40, 40, 60, 0.95), rgba(25, 25, 40, 0.95)); /* Panel background */
+    border: 2px solid rgba(150, 150, 180, 0.6);
+    border-radius: 10px;
+    padding: 15px;
+    color: white;
+    z-index: 1000; /* Below button but above game */
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  }
+
+  #pet-locker-panel h3 {
+    margin-top: 0;
+    text-align: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+    color: #e0e0ff;
+  }
+
+  #pet-locker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px; /* Space between pet entries */
+  }
+
+  .pet-locker-entry {
+    display: flex;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.05);
+    padding: 8px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: transform 0.2s ease, background-color 0.2s ease;
+  }
+  
+  .pet-locker-entry:hover {
+    transform: translateX(3px);
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Add styles for pet image containers and rarity borders */
+  .pet-image-container {
+    width: 45px;
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 3px;
+    margin-right: 10px;
+  }
+
+  .pet-image-container img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  /* Rarity styles */
+  .basic-rarity {
+    border: 2px solid #8B4513; /* Brown border */
+    box-shadow: 0 0 5px rgba(139, 69, 19, 0.5);
+  }
+
+  .silver-rarity {
+    border: 2px solid #C0C0C0; /* Silver border */
+    box-shadow: 0 0 5px rgba(192, 192, 192, 0.7);
+  }
+
+  .golden-rarity {
+    border: 2px solid #FFD700; /* Gold border */
+    box-shadow: 0 0 8px rgba(255, 215, 0, 0.7);
+  }
+
+  .diamond-rarity {
+    border: 2px solid #B9F2FF; /* Diamond blue border */
+    box-shadow: 0 0 10px rgba(185, 242, 255, 0.8);
+  }
+
+  .pet-info {
+    flex-grow: 1; /* Allow info container to take remaining space */
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .pet-name {
+    font-size: 14px;
+    font-weight: bold;
+    margin-bottom: 2px;
+  }
+  
+  .pet-rarity {
+    font-size: 11px;
+    opacity: 0.7;
+  }
+
+  /* Text color styles */
+  .basic-text {
+    color: #A0522D; /* Brown text */
+  }
+
+  .silver-text {
+    color: #C0C0C0; /* Silver text */
+  }
+
+  .golden-text {
+    color: #FFD700; /* Gold text */
+  }
+
+  .diamond-text {
+    color: #B9F2FF; /* Diamond blue text */
+  }
+
+  .pet-locker-entry button {
+    background-color: #e74c3c; /* Red delete button */
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 10px;
+    transition: background-color 0.2s ease;
+  }
+
+  .pet-locker-entry button:hover {
+    background-color: #c0392b;
+  }
+  
+  #close-pet-locker-button {
+    display: block; /* Make it a block element */
+    width: 100%; /* Full width */
+    margin-top: 15px; /* Space above */
+    padding: 8px;
+    background-color: #555;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+  }
+
+  #close-pet-locker-button:hover {
+    background-color: #777;
+  }
+</style>
+
+<script>
+  // Assuming hytopia object exists and provides onData and sendMessage
+
+  const petLockerButton = document.querySelector('#pet-locker-button');
+  const petLockerPanel = document.querySelector('#pet-locker-panel');
+  const petLockerList = document.querySelector('#pet-locker-list');
+  const closePetLockerButton = document.querySelector('#close-pet-locker-button'); // Get close button
+
+  // --- Toggle Pet Locker Panel ---
+  petLockerButton?.addEventListener('click', () => {
+    console.log('[DEBUG] Opening pet locker panel');
+    if (petLockerPanel) {
+      petLockerPanel.style.display = petLockerPanel.style.display === 'none' ? 'block' : 'none';
+      
+      if (petLockerPanel.style.display === 'block') {
+        console.log('[DEBUG] Requesting current session pets');
+        hytopia.sendData({ type: 'requestOwnedPets' });
+      }
+    }
+  });
+
+  // --- Close Pet Locker Panel ---
+  closePetLockerButton?.addEventListener('click', () => {
+      petLockerPanel.style.display = 'none';
+  });
+
+
+  // --- Handle Data from Server ---
+  try {
+    hytopia.onData(data => {
+      console.log('[DEBUG] Received data from server:', data);
+
+      if (data && data.type === 'updateOwnedPets' && Array.isArray(data.pets)) {
+        console.log('[DEBUG] Processing updateOwnedPets message with', data.pets.length, 'pets');
+        
+        if (!petLockerList) return;
+        
+        // Clear existing list
+        petLockerList.innerHTML = '';
+        
+        if (data.pets.length === 0) {
+          console.log('[DEBUG] No pets in session, showing empty message');
+          petLockerList.innerHTML = '<p style="text-align: center; color: #aaa;">You have no pets yet!</p>';
+          return;
+        }
+        
+        // Add each pet to the list
+        data.pets.forEach(pet => {
+          console.log('[DEBUG] Adding pet entry for', pet.type, 'with rarity', pet.rarity);
+          
+          const petEntry = document.createElement('div');
+          petEntry.className = 'pet-locker-entry';
+          
+          // Convert pet type to correct image filename based on available assets (CASE-INSENSITIVE)
+          let imageFilename = 'placeholder.png';
+          switch(pet.type.toLowerCase()) {
+            case 'chicken':
+              imageFilename = 'chicken.png';
+              break;
+            case 'bat':
+              imageFilename = 'bat.png';
+              break;
+            case 'cow':
+              imageFilename = 'cow.png';
+              break;
+            case 'dd':
+              imageFilename = 'dogedog.png';
+              break;
+            case 'donkey':
+              imageFilename = 'donkey.png';
+              break;
+            case 'ocelot':
+              imageFilename = 'ocelot.png';
+              break;
+            case 'pig':
+              imageFilename = 'pig.png';
+              break;
+            case 'rabbit':
+              imageFilename = 'rabbit.png';
+              break;
+            case 'sheep':
+              imageFilename = 'sheep.png';
+              break;
+            case 'spider':
+              imageFilename = 'spider.png';
+              break;
+            case 'squid':
+              imageFilename = 'squid.png';
+              break;
+            case 'payload bomb':
+              imageFilename = 'payload-bomb.png';
+              break;
+            default:
+              imageFilename = 'placeholder.png';
+          }
+          
+          // Determine rarity class BASED ON RECEIVED RARITY
+          let rarityClass = 'basic'; // Default to basic
+          switch (pet.rarity) { // <<< Use received pet.rarity
+              case 'silver':
+                  rarityClass = 'silver';
+                  break;
+              case 'golden':
+                  rarityClass = 'golden';
+                  break;
+              case 'diamond':
+                  rarityClass = 'mythic'; // <<< Changed to 'mythic'
+                  break;
+          }
+          
+          petEntry.innerHTML = `
+            <div class="pet-image-container ${rarityClass}-rarity">
+              <img src="{{CDN_ASSETS_URL}}/animals/${imageFilename}" onerror="this.src='{{CDN_ASSETS_URL}}/animals/placeholder.png'" alt="${pet.type}">
+            </div>
+            <div class="pet-info">
+              <span class="pet-name">${pet.type}</span>
+              <span class="pet-rarity ${rarityClass}-text">${rarityClass}</span>
+            </div>
+            <button data-persistent-id="${pet.persistentId}">Delete</button>
+          `;
+          
+          // Add delete handler
+          const deleteButton = petEntry.querySelector('button');
+          deleteButton?.addEventListener('click', (e) => {
+            const button = e.currentTarget;
+            if (!(button instanceof HTMLButtonElement)) return;
+            const persistentId = button.dataset.persistentId;
+            
+            console.log('[DEBUG] Requesting deletion of pet:', persistentId);
+            
+            // Disable button and show pending state
+            button.disabled = true;
+            button.textContent = 'Deleting...';
+            petEntry.style.opacity = '0.5';
+            
+            // Send delete request
+            hytopia.sendData({
+              type: 'deletePet',
+              persistentId
+            });
+          });
+          
+          petLockerList.appendChild(petEntry);
+          console.log('[DEBUG] Added pet entry to list');
+        });
+      }
+      // Handle deletion confirmation
+      else if (data && data.type === 'petDeleteConfirmed') {
+        console.log('[DEBUG] Server confirmed pet deletion');
+        // UI will be updated by the updateOwnedPets message that follows
+      }
+      // Handle deletion failures
+      else if (data && data.type === 'petDeleteFailed') {
+        console.log('[ERROR] Pet deletion failed:', data.reason);
+        
+        // Check if petLockerList exists before querying
+        if (petLockerList) {
+            const failedEntry = petLockerList.querySelector(`button[data-persistent-id="${data.persistentId}"]`)?.closest('.pet-locker-entry');
+            if (failedEntry instanceof HTMLElement) { // Check if failedEntry is an HTMLElement
+                failedEntry.style.opacity = '1';
+                const button = failedEntry.querySelector('button');
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = 'Delete';
+                }
+            }
+        }
+      }
+    });
+  } catch (e) {
+    console.error("[ERROR] Failed to setup data handler:", e);
+  }
+
+</script>
