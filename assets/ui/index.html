@@ -337,15 +337,10 @@ and also configure additional buttons for mobile compatibility.
   </div>
   
   <div class="instructions">
-    Press <strong>E</strong> when near a pet to make it follow you.
+    Press <strong>F</strong> to hatch a egg
   </div>
 
   <!-- Other UI elements like tower floor, block count display, etc. might go here -->
-  <div class="top-right-info">
-    <div id="tower-floor-display">Floor: <span id="tower-floor-number">1</span></div>
-    <div>Blocks: <span class="top-block-count">0</span> (<span class="top-block-rate">0/s</span>)</div>
-  </div>
-
   <a id="teleport-button" class="teleport-button-style">Teleport to Top</a>
 
   <!-- ADDED: Egg Prompt HTML Structure -->
@@ -503,13 +498,6 @@ and also configure additional buttons for mobile compatibility.
     </div>
   </div>
 </template>
-
-<!-- Add this new UI element to match the image, which will be positioned at the top center -->
-<div class="top-block-counter">
-  <div class="top-block-icon"></div>
-  <div class="top-block-count">0</div>
-  <div class="top-block-rate">+1 Block/s</div>
-</div>
 
 <style>
   /* By default, we hide the mobile controls */
@@ -673,7 +661,7 @@ and also configure additional buttons for mobile compatibility.
   /* Style for the teleport button */
   #teleport-button {
     position: fixed;
-    top: 70px; /* Position below existing UI elements */
+    top: 90px; /* MODIFIED: Moved down from 70px */
     left: 10px;
     padding: 8px 15px;
     background-color: #4CAF50; /* Green */
